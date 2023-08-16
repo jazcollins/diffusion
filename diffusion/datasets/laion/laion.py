@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import CLIPTokenizer
 
-from diffusion.datasets.laion.transforms import LargestCenterSquare
+from diffusion.datasets.laion.transforms import LargestCenterSquare, RandomCropSquareReturnTransform
 
 # Disable PIL max image size limit
 Image.MAX_IMAGE_PIXELS = None
@@ -56,6 +56,7 @@ class StreamingLAIONDataset(StreamingDataset):
         batch_size: Optional[int] = None,
         image_size: Optional[int] = None,
         num_canonical_nodes: Optional[int] = None,
+        sdxl: Optional[bool] = False,
     ) -> None:
 
         super().__init__(
@@ -77,12 +78,19 @@ class StreamingLAIONDataset(StreamingDataset):
         self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
         self.caption_drop_prob = caption_drop_prob
         self.image_size = image_size
+        self.sdxl = sdxl
+        if sdxl:
+            self.sdxl_transform = RandomCropSquareReturnTransform(self.image_size)
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
         img = Image.open(BytesIO(sample['jpg']))
         if img.mode != 'RGB':
             img = img.convert('RGB')
+
+        if self.sdxl:
+            # sdxl crop to return params
+            img, crop_top, crop_left, image_height, image_width = self.sdxl_transform(img)
 
         if self.transform is not None:
             img = self.transform(img)
@@ -109,6 +117,11 @@ class StreamingLAIONDataset(StreamingDataset):
         if self.image_size == 512 and 'latents_512' in sample:
             out['image_latents'] = torch.from_numpy(np.frombuffer(sample['latents_512'],
                                                                   dtype=np.float16).copy()).reshape(4, 64, 64)
+
+        if self.sdxl: # add crop and img size params
+            out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left])
+            out['cond_original_size'] = torch.tensor([image_width, image_height])
+            out['cond_target_size'] = torch.tensor([self.image_size, self.image_size])
         return out
 
 
@@ -126,6 +139,7 @@ def build_streaming_laion_dataloader(
     drop_last: bool = True,
     shuffle: bool = True,
     num_canonical_nodes: Optional[int] = None,
+    sdxl: bool = False,
     **dataloader_kwargs,
 ):
     """Builds a streaming LAION dataloader.
@@ -144,6 +158,7 @@ def build_streaming_laion_dataloader(
         drop_last (bool): Whether to drop the last batch if it is incomplete. Default: ``True``.
         shuffle (bool): Whether to shuffle the samples in this dataset. Default: ``True``.
         num_canonical_nodes (int, optional): The number of canonical nodes for shuffle. Default: ``None``.
+        sdxl (bool): Whether training SDXL or not. If True, return img size and crop params for conditioning. Default: ``False``.
         **dataloader_kwargs: Additional arguments to pass to the dataloader.
     """
     if isinstance(remote, str) and isinstance(local, str):
@@ -161,10 +176,15 @@ def build_streaming_laion_dataloader(
     for r, l in zip(remote, local):
         streams.append(Stream(remote=r, local=l, download_retry=download_retry, download_timeout=download_timeout))
 
-    center_square_crop = LargestCenterSquare(resize_size)
     # Normalize from 0 to 1 to -1 to 1
     normalize = transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    transform = transforms.Compose([center_square_crop, transforms.ToTensor(), normalize])
+    if sdxl:
+        # do center square crop separately
+        transform = transforms.Compose([transforms.ToTensor(), normalize])
+    else:
+        center_square_crop = LargestCenterSquare(resize_size)
+        transform = transforms.Compose([center_square_crop, transforms.ToTensor(), normalize])
+    
     dataset = StreamingLAIONDataset(
         streams=streams,
         split=None,
@@ -178,6 +198,7 @@ def build_streaming_laion_dataloader(
         batch_size=batch_size,
         image_size=resize_size,
         num_canonical_nodes=num_canonical_nodes,
+        sdxl=sdxl,
     )
     # Create a subset of the dataset
     if num_samples is not None:

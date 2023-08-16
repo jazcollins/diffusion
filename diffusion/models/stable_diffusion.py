@@ -84,7 +84,8 @@ class StableDiffusion(ComposerModel):
                  text_latents_key: str = 'caption_latents',
                  precomputed_latents: bool = False,
                  encode_latents_in_fp16: bool = False,
-                 fsdp: bool = False):
+                 fsdp: bool = False,
+                 sdxl: bool = False):
         super().__init__()
         self.unet = unet
         self.vae = vae
@@ -97,6 +98,7 @@ class StableDiffusion(ComposerModel):
         self.image_key = image_key
         self.image_latents_key = image_latents_key
         self.precomputed_latents = precomputed_latents
+        self.sdxl = sdxl
 
         # setup metrics
         if train_metrics is None:
@@ -157,6 +159,8 @@ class StableDiffusion(ComposerModel):
         latents, conditioning = None, None
         # Use latents if specified and available. When specified, they might not exist during eval
         if self.precomputed_latents and self.image_latents_key in batch and self.text_latents_key in batch:
+            if self.sdxl:
+                assert False, 'NIY'
             latents, conditioning = batch[self.image_latents_key], batch[self.text_latents_key]
         else:
             inputs, conditioning = batch[self.image_key], batch[self.text_key]
@@ -167,11 +171,24 @@ class StableDiffusion(ComposerModel):
                     # Encode the images to the latent space.
                     # Encode prompt into conditioning vector
                     latents = self.vae.encode(inputs.half())['latent_dist'].sample().data
-                    conditioning = self.text_encoder(conditioning)[0]  # Should be (batch_size, 77, 768)
+                    if self.sdxl:
+                        # a la https://github.com/huggingface/diffusers/blob/v0.19.3/src/diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py#L329
+                        text_encoder_out = self.text_encoder(conditioning, output_hidden_states=True)
+                        pooled_conditioning = text_encoder_out[0] # (batch_size, 1280)
+                        conditioning = text_encoder_out.hidden_states[-2] # (batch_size, 77, 1280) 
+                    else:
+                        conditioning = self.text_encoder(conditioning)[0]  # Should be (batch_size, 77, 768)
 
             else:
                 latents = self.vae.encode(inputs)['latent_dist'].sample().data
-                conditioning = self.text_encoder(conditioning)[0]
+                if self.sdxl:
+                    assert False, 'NIY'
+                    # a la https://github.com/huggingface/diffusers/blob/v0.19.3/src/diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py#L329
+                    text_encoder_out = self.text_encoder(conditioning, output_hidden_states=True)
+                    pooled_conditioning = text_encoder_out[0] # (batch_size, 77, 1024)
+                    conditioning = text_encoder_out.hidden_states[-2] # (batch_size, 77, 1024)
+                else:
+                    conditioning = self.text_encoder(conditioning)[0]
             # Magical scaling number (See https://github.com/huggingface/diffusers/issues/437#issuecomment-1241827515)
             latents *= 0.18215
 
@@ -190,8 +207,29 @@ class StableDiffusion(ComposerModel):
         else:
             raise ValueError(
                 f'prediction type must be one of sample, epsilon, or v_prediction. Got {self.prediction_type}')
+        
+        added_cond_kwargs = {}
+        # if using SDXL, prepare added time ids & embeddings
+        if self.sdxl:
+            # TODO double check cond_crops_coords_top_left calc in transforms.py
+            add_time_ids = torch.cat([batch['cond_original_size'], 
+                                      batch['cond_crops_coords_top_left'], 
+                                      batch['cond_target_size']], dim=1)
+            add_text_embeds = pooled_conditioning
+            
+            # dimensionality sanity check
+            add_time_ids_dim = add_time_ids.shape[1]
+            passed_add_embed_dim = self.unet.config.addition_time_embed_dim * add_time_ids_dim + self.text_encoder.config.projection_dim
+            expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
+            if expected_add_embed_dim != passed_add_embed_dim:
+                raise ValueError(
+                    f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
+                )
+
+            added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+        
         # Forward through the model
-        return self.unet(noised_latents, timesteps, conditioning)['sample'], targets, timesteps
+        return self.unet(noised_latents, timesteps, conditioning, added_cond_kwargs=added_cond_kwargs)['sample'], targets, timesteps
 
     def loss(self, outputs, batch):
         """Loss between unet output and added noise, typically mse."""
@@ -375,6 +413,7 @@ class StableDiffusion(ComposerModel):
 
             latent_model_input = self.inference_scheduler.scale_model_input(latent_model_input, t)
             # Model prediction
+            # TODO UNET CALL - MODIFY
             pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
 
             if do_classifier_free_guidance:

@@ -11,7 +11,7 @@ from diffusers import AutoencoderKL, DDIMScheduler, DDPMScheduler, UNet2DConditi
 from torchmetrics import MeanSquaredError
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.multimodal.clip_score import CLIPScore
-from transformers import CLIPTextModel, CLIPTokenizer, PretrainedConfig
+from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer, PretrainedConfig
 
 from diffusion.models.pixel_diffusion import PixelDiffusion
 from diffusion.models.stable_diffusion import StableDiffusion
@@ -23,6 +23,184 @@ try:
     is_xformers_installed = True
 except:
     is_xformers_installed = False
+
+
+def stable_diffusion_xl(
+    model_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
+    unet_model_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
+    vae_model_name: str = 'madebyollin/sdxl-vae-fp16-fix',
+    pretrained: bool = True,
+    prediction_type: str = 'epsilon',
+    train_metrics: Optional[List] = None,
+    val_metrics: Optional[List] = None,
+    val_guidance_scales: Optional[List] = None,
+    val_seed: int = 1138,
+    loss_bins: Optional[List] = None,
+    precomputed_latents: bool = False,
+    encode_latents_in_fp16: bool = True,
+    fsdp: bool = True,
+):
+    """Stable diffusion v2 training setup.
+
+    Requires batches of matched images and text prompts to train. Generates images from text
+    prompts.
+
+    Args:
+        model_name (str, optional): Name of the model to load. Determines the text encoder used.
+            Defaults to 'stabilityai/stable-diffusion-xl-base-1.0'.
+        unet_model_name (str, optional): Name of the UNet model to load. Defaults to 
+            'stabilityai/stable-diffusion-xl-base-1.0'.
+        vae_model_name (str, optional): Name of the VAE model to load. Defaults to 
+            'madebyollin/sdxl-vae-fp16-fix' (SDXL VAE).
+        pretrained (bool, optional): Whether to load pretrained weights. Defaults to True.
+        prediction_type (str): The type of prediction to use. Must be one of 'sample',
+            'epsilon', or 'v_prediction'. Default: `epsilon`.
+        train_metrics (list, optional): List of metrics to compute during training. If None, defaults to
+            [MeanSquaredError()].
+        val_metrics (list, optional): List of metrics to compute during validation. If None, defaults to
+            [MeanSquaredError(), FrechetInceptionDistance(normalize=True)].
+        val_guidance_scales (list, optional): List of scales to use for validation guidance. If None, defaults to
+            [1.0, 3.0, 7.0].
+        val_seed (int, optional): Seed to use for generating evaluation images. Defaults to 1138.
+        loss_bins (list, optional): List of tuples of (min, max) values to use for loss binning. If None, defaults to
+            [(0, 1)].
+        precomputed_latents (bool, optional): Whether to use precomputed latents. Defaults to False.
+        encode_latents_in_fp16 (bool, optional): Whether to encode latents in fp16. Defaults to True.
+        fsdp (bool, optional): Whether to use FSDP. Defaults to True.
+    """
+    if train_metrics is None:
+        train_metrics = [MeanSquaredError()]
+    if val_metrics is None:
+        val_metrics = [MeanSquaredError(), FrechetInceptionDistance(normalize=True)]
+    if val_guidance_scales is None:
+        val_guidance_scales = [1.0, 3.0, 7.0]
+    if loss_bins is None:
+        loss_bins = [(0, 1)]
+    # Fix a bug where CLIPScore requires grad
+    for metric in val_metrics:
+        if isinstance(metric, CLIPScore):
+            metric.requires_grad_(False)
+
+    if pretrained:
+        unet = UNet2DConditionModel.from_pretrained(unet_model_name, subfolder='unet')
+    else:
+        # config = PretrainedConfig.get_config_dict(unet_model_name, subfolder='unet')
+
+        # if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
+        #     print('using SDXL unet!')
+        #     # TODO this can probably be different!!!
+        #     config[0]['addition_embed_type'] = None
+        #     config[0]['cross_attention_dim'] = 1024
+
+        # unet = UNet2DConditionModel(**config[0])
+
+        # smaller SDXL-style unet for debugging
+        unet = UNet2DConditionModel(act_fn='silu',
+                                    addition_embed_type = 'text_time',
+                                    addition_embed_type_num_heads = 64,
+                                    addition_time_embed_dim = 256,
+                                    attention_head_dim=[5, 10, 20],
+                                    block_out_channels=[32, 32, 1280], # make smaller and more manageable for local debug,
+                                    # block_out_channels=[320, 640, 1280],
+                                    center_input_sample=False, 
+                                    class_embed_type=None, 
+                                    class_embeddings_concat=False, 
+                                    conv_in_kernel=3, 
+                                    conv_out_kernel=3, 
+                                    cross_attention_dim=1280, # 2048, default (2048) - 1280 = 768 (other text encoder dim)
+                                    cross_attention_norm=None, 
+                                    down_block_types=['DownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D'], 
+                                    downsample_padding=1, 
+                                    dual_cross_attention=False, 
+                                    encoder_hid_dim=None, 
+                                    encoder_hid_dim_type=None, 
+                                    flip_sin_to_cos=True, 
+                                    freq_shift=0, 
+                                    in_channels=4, 
+                                    layers_per_block=2, 
+                                    mid_block_only_cross_attention=None, 
+                                    mid_block_scale_factor=1, 
+                                    mid_block_type='UNetMidBlock2DCrossAttn', 
+                                    norm_eps=1e-05, 
+                                    norm_num_groups=32, 
+                                    num_attention_heads=None, 
+                                    num_class_embeds=None, 
+                                    only_cross_attention=False, 
+                                    out_channels=4,
+                                    projection_class_embeddings_input_dim=2816, # assuming use of text_encoder_2 
+                                    resnet_out_scale_factor=1.0, 
+                                    resnet_skip_time_act=False, 
+                                    resnet_time_scale_shift='default', 
+                                    sample_size=128, 
+                                    time_cond_proj_dim=None, 
+                                    time_embedding_act_fn=None,
+                                    time_embedding_dim=None, 
+                                    time_embedding_type='positional', 
+                                    timestep_post_act=None,
+                                    transformer_layers_per_block=[1, 2, 10], 
+                                    up_block_types=['CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'UpBlock2D'], 
+                                    upcast_attention=None, 
+                                    use_linear_projection=True)
+
+    if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
+        # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
+        unet.up_blocks._fsdp_wrap = False
+        unet.down_blocks._fsdp_wrap = False
+        for block in unet.up_blocks:
+            block._fsdp_wrap = True
+        for block in unet.down_blocks:
+            block._fsdp_wrap = True
+
+
+    if encode_latents_in_fp16:
+        try: 
+            vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae', torch_dtype=torch.float16)
+        except: # for handling SDXL vae fp16 fixed checkpoint
+            vae = AutoencoderKL.from_pretrained(vae_model_name, torch_dtype=torch.float16)
+        # text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder', torch_dtype=torch.float16)
+        text_encoder = CLIPTextModelWithProjection.from_pretrained(model_name, subfolder='text_encoder_2', torch_dtype=torch.float16)
+        # import pdb;pdb.set_trace()
+    else:
+        vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae')
+        # text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder')
+        text_encoder = CLIPTextModelWithProjection.from_pretrained(model_name, subfolder='text_encoder_2')
+
+    # tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer')
+    tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer_2')
+    noise_scheduler = DDPMScheduler.from_pretrained(model_name, subfolder='scheduler')
+    inference_noise_scheduler = DDIMScheduler(num_train_timesteps=noise_scheduler.config.num_train_timesteps,
+                                              beta_start=noise_scheduler.config.beta_start,
+                                              beta_end=noise_scheduler.config.beta_end,
+                                              beta_schedule=noise_scheduler.config.beta_schedule,
+                                              trained_betas=noise_scheduler.config.trained_betas,
+                                              clip_sample=noise_scheduler.config.clip_sample,
+                                              set_alpha_to_one=noise_scheduler.config.set_alpha_to_one,
+                                              prediction_type=prediction_type)
+
+    model = StableDiffusion(
+        unet=unet,
+        vae=vae,
+        text_encoder=text_encoder,
+        tokenizer=tokenizer,
+        noise_scheduler=noise_scheduler,
+        inference_noise_scheduler=inference_noise_scheduler,
+        prediction_type=prediction_type,
+        train_metrics=train_metrics,
+        val_metrics=val_metrics,
+        val_guidance_scales=val_guidance_scales,
+        val_seed=val_seed,
+        loss_bins=loss_bins,
+        precomputed_latents=precomputed_latents,
+        encode_latents_in_fp16=encode_latents_in_fp16,
+        fsdp=fsdp,
+        sdxl=True,
+    )
+    if torch.cuda.is_available():
+        model = DeviceGPU().module_to_device(model)
+        if is_xformers_installed:
+            model.unet.enable_xformers_memory_efficient_attention()
+            model.vae.enable_xformers_memory_efficient_attention()
+    return model
 
 
 def stable_diffusion_2(
@@ -97,10 +275,10 @@ def stable_diffusion_2(
         # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
         unet.up_blocks._fsdp_wrap = False
         unet.down_blocks._fsdp_wrap = False
-        # for block in unet.up_blocks:
-        #     block._fsdp_wrap = False
-        # for block in unet.down_blocks:
-        #     block._fsdp_wrap = False
+        for block in unet.up_blocks:
+            block._fsdp_wrap = True
+        for block in unet.down_blocks:
+            block._fsdp_wrap = True
 
 
     if encode_latents_in_fp16:
@@ -147,6 +325,7 @@ def stable_diffusion_2(
             model.unet.enable_xformers_memory_efficient_attention()
             model.vae.enable_xformers_memory_efficient_attention()
     return model
+
 
 
 def discrete_pixel_diffusion(clip_model_name: str = 'openai/clip-vit-large-patch14', prediction_type='epsilon'):
