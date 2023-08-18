@@ -75,7 +75,10 @@ class StreamingLAIONDataset(StreamingDataset):
         )
 
         self.transform = transform
-        self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
+        if sdxl:
+            self.tokenizer = CLIPTokenizer.from_pretrained('stabilityai/stable-diffusion-xl-base-1.0', subfolder='tokenizer_2')
+        else:
+            self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
         self.caption_drop_prob = caption_drop_prob
         self.image_size = image_size
         self.sdxl = sdxl

@@ -240,11 +240,24 @@ class StableDiffusion(ComposerModel):
         # Skip this if outputs have already been computed, e.g. during training
         if outputs is not None:
             return outputs
-        # Get unet outputs
-        unet_out, targets, timesteps = self.forward(batch)
-        # Sample images from the prompts in the batch
+        
         prompts = batch[self.text_key]
         height, width = batch[self.image_key].shape[-2], batch[self.image_key].shape[-1]
+        
+        # If SDXL, add eval-time micro-conditioning to batch
+        if self.sdxl:
+            device = self.unet.device
+            bsz = batch[self.image_key].shape[0]
+            # Set to resolution we are trying to generate
+            batch['cond_original_size'] = torch.tensor([[width, height]]).repeat(bsz, 1).to(device)
+            # No cropping
+            batch['cond_crops_coords_top_left'] = torch.tensor([[0., 0.]]).repeat(bsz, 1).to(device)
+            # Set to resolution we are trying to generate
+            batch['cond_target_size'] = torch.tensor([[width, height]]).repeat(bsz, 1).to(device)
+
+        # Get unet outputs
+        unet_out, targets, timesteps = self.forward(batch)
+        # Sample images from the prompts in the batch        
         generated_images = {}
         for guidance_scale in self.val_guidance_scales:
             gen_images = self.generate(tokenized_prompts=prompts,
@@ -382,16 +395,18 @@ class StableDiffusion(ComposerModel):
 
         do_classifier_free_guidance = guidance_scale > 1.0  # type: ignore
 
-        text_embeddings = self._prepare_text_embeddings(prompt, tokenized_prompts, prompt_embeds, num_images_per_prompt)
+        text_embeddings, pooled_text_embeddings = self._prepare_text_embeddings(prompt, tokenized_prompts, prompt_embeds, num_images_per_prompt)
         batch_size = len(text_embeddings)  # len prompts * num_images_per_prompt
         # classifier free guidance + negative prompts
         # negative prompt is given in place of the unconditional input in classifier free guidance
         if do_classifier_free_guidance:
             negative_prompt = negative_prompt or ([''] * (batch_size // num_images_per_prompt))  # type: ignore
-            unconditional_embeddings = self._prepare_text_embeddings(negative_prompt, tokenized_negative_prompts,
-                                                                     negative_prompt_embeds, num_images_per_prompt)
+            unconditional_embeddings, pooled_unconditional_embeddings = self._prepare_text_embeddings(negative_prompt, 
+                                                                     tokenized_negative_prompts, negative_prompt_embeds, num_images_per_prompt)
             # concat uncond + prompt
             text_embeddings = torch.cat([unconditional_embeddings, text_embeddings])
+            if self.sdxl:
+                pooled_text_embeddings = torch.cat([pooled_unconditional_embeddings, pooled_text_embeddings])
 
         # prepare for diffusion generation process
         latents = torch.randn(
@@ -404,6 +419,28 @@ class StableDiffusion(ComposerModel):
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.inference_scheduler.init_noise_sigma
 
+        added_cond_kwargs = {}
+        # if using SDXL, prepare added time ids & embeddings
+        if self.sdxl:
+            cond_original_size = torch.tensor([[width, height]]).repeat(pooled_text_embeddings.shape[0], 1).to(device)
+            cond_crops_coords_top_left = torch.tensor([[0., 0.]]).repeat(pooled_text_embeddings.shape[0], 1).to(device)
+            cond_target_size = torch.tensor([[width, height]]).repeat(pooled_text_embeddings.shape[0], 1).to(device)
+            add_time_ids = torch.cat([cond_original_size, 
+                                      cond_crops_coords_top_left, 
+                                      cond_target_size], dim=1)
+            add_text_embeds = pooled_text_embeddings
+            
+            # dimensionality sanity check
+            add_time_ids_dim = add_time_ids.shape[1]
+            passed_add_embed_dim = self.unet.config.addition_time_embed_dim * add_time_ids_dim + self.text_encoder.config.projection_dim
+            expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
+            if expected_add_embed_dim != passed_add_embed_dim:
+                raise ValueError(
+                    f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
+                )
+
+            added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+
         # backward diffusion process
         for t in tqdm(self.inference_scheduler.timesteps, disable=not progress_bar):
             if do_classifier_free_guidance:
@@ -413,8 +450,7 @@ class StableDiffusion(ComposerModel):
 
             latent_model_input = self.inference_scheduler.scale_model_input(latent_model_input, t)
             # Model prediction
-            # TODO UNET CALL - MODIFY
-            pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+            pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings, added_cond_kwargs=added_cond_kwargs).sample
 
             if do_classifier_free_guidance:
                 # perform guidance. Note this is only techincally correct for prediction_type 'epsilon'
@@ -441,15 +477,28 @@ class StableDiffusion(ComposerModel):
                                                    max_length=self.tokenizer.model_max_length,
                                                    truncation=True,
                                                    return_tensors='pt').input_ids
-            text_embeddings = self.text_encoder(tokenized_prompts.to(device))[0]  # type: ignore
+            if self.sdxl:
+                text_encoder_out = self.text_encoder(tokenized_prompts.to(device), output_hidden_states=True)
+                pooled_text_embeddings = text_encoder_out[0] # (batch_size, 1280)
+                text_embeddings = text_encoder_out.hidden_states[-2] # (batch_size, 77, 1280)
+            else:
+                text_embeddings = self.text_encoder(tokenized_prompts.to(device))[0]  # type: ignore
+                pooled_text_embeddings = None
         else:
             text_embeddings = prompt_embeds
+            if self.sdxl:
+                assert False, 'NIY'
 
         # duplicate text embeddings for each generation per prompt
-        bs_embed, seq_len, _ = text_embeddings.shape
+        bs_embed, seq_len, _ = text_embeddings.shape # [2, 77, 1280]
         text_embeddings = text_embeddings.repeat(1, num_images_per_prompt, 1)  # type: ignore
         text_embeddings = text_embeddings.view(bs_embed * num_images_per_prompt, seq_len, -1)
-        return text_embeddings
+
+        if self.sdxl:
+            # TODO double check this - original size: [2, 1280]
+            pooled_text_embeddings = pooled_text_embeddings.repeat(1, num_images_per_prompt)
+            pooled_text_embeddings = pooled_text_embeddings.view(bs_embed * num_images_per_prompt, -1)
+        return text_embeddings, pooled_text_embeddings
 
 
 def _check_prompt_lenths(prompt, negative_prompt):
