@@ -31,6 +31,7 @@ class StreamingLAIONDataset(StreamingDataset):
         split (str, optional): The dataset split to use. Currently, only ``None`` is supported. Default: ``None``.
         shuffle (bool): Whether to shuffle the samples in this dataset. Default: ``False``.
         tokenizer_name_or_path (str): The name or path of the tokenizer to use. Default: ``'stabilityai/stable-diffusion-2-base'``.
+        tokenizer_name_or_path_2 (Optional[str]): The name or path of the second tokenizer (for SDXL). Default: ``None``.
         transform (Optional[Callable]): The transforms to apply to the image. Default: ``None``.
         predownload (Optional[int]): The number of samples to prefetch. Default: ``100_000``.
         download_retry (Optional[int]): The number of times to retry a download. Default: ``2``.
@@ -48,6 +49,7 @@ class StreamingLAIONDataset(StreamingDataset):
         split: Optional[str] = None,
         shuffle: bool = False,
         tokenizer_name_or_path: str = 'stabilityai/stable-diffusion-2-base',
+        tokenizer_name_or_path_2: Optional[str] = None,
         caption_drop_prob: float = 0.0,
         transform: Optional[Callable] = None,
         predownload: int = 100_000,
@@ -75,10 +77,13 @@ class StreamingLAIONDataset(StreamingDataset):
         )
 
         self.transform = transform
+        self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
         if sdxl:
-            self.tokenizer = CLIPTokenizer.from_pretrained('stabilityai/stable-diffusion-xl-base-1.0', subfolder='tokenizer_2')
-        else:
-            self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
+            if tokenizer_name_or_path_2:
+                self.tokenizer_2 = CLIPTokenizer.from_pretrained(tokenizer_name_or_path_2, subfolder='tokenizer_2')
+            else:
+                raise ValueError('Must provide value for tokenizer_name_or_path_2')
+            
         self.caption_drop_prob = caption_drop_prob
         self.image_size = image_size
         self.sdxl = sdxl
@@ -91,6 +96,7 @@ class StreamingLAIONDataset(StreamingDataset):
         if img.mode != 'RGB':
             img = img.convert('RGB')
 
+        crop_top, crop_left, image_height, image_width = None, None, None, None
         if self.sdxl:
             # sdxl crop to return params
             img, crop_top, crop_left, image_height, image_width = self.sdxl_transform(img)
@@ -111,6 +117,18 @@ class StreamingLAIONDataset(StreamingDataset):
         )['input_ids']
         tokenized_caption = torch.tensor(tokenized_caption)
         out = {'image': img, 'captions': tokenized_caption}
+
+        # optional SDXL tokenizer_2
+        if self.sdxl:
+            tokenized_caption_2 = self.tokenizer_2(
+                caption,
+                padding='max_length',
+                max_length=self.tokenizer_2.model_max_length,
+                truncation=True,
+            )['input_ids']
+            tokenized_caption_2 = torch.tensor(tokenized_caption_2)
+            out['captions_2'] = tokenized_caption_2
+
         if 'caption_latents' in sample:
             out['caption_latents'] = torch.from_numpy(
                 np.frombuffer(sample['caption_latents'], dtype=np.float16).copy()).reshape(77, 1024)
@@ -121,7 +139,7 @@ class StreamingLAIONDataset(StreamingDataset):
             out['image_latents'] = torch.from_numpy(np.frombuffer(sample['latents_512'],
                                                                   dtype=np.float16).copy()).reshape(4, 64, 64)
 
-        if self.sdxl: # add crop and img size params
+        if self.sdxl:  # add crop and img size params
             out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left])
             out['cond_original_size'] = torch.tensor([image_width, image_height])
             out['cond_target_size'] = torch.tensor([self.image_size, self.image_size])
@@ -133,6 +151,7 @@ def build_streaming_laion_dataloader(
     local: Union[str, List],
     batch_size: int,
     tokenizer_name_or_path: str = 'stabilityai/stable-diffusion-2-base',
+    tokenizer_name_or_path_2: Optional[str] = None,
     caption_drop_prob: float = 0.0,
     resize_size: int = 256,
     num_samples: Optional[int] = None,
@@ -152,6 +171,7 @@ def build_streaming_laion_dataloader(
         local (str, Sequence[str]): One or more local filesystem directories where dataset is cached during operation.
         batch_size (int): The batch size to use.
         tokenizer_name_or_path (str): The name or path of the tokenizer to use. Default: ``'stabilityai/stable-diffusion-2-base'``.
+        tokenizer_name_or_path_2 (Optional[str]): The name or path of the second tokenizer to use (for SDXL). Default: ``None``.
         caption_drop_prob (float): The probability of dropping a caption. Default: ``0.0``.
         resize_size (int): The size to resize the image to. Default: ``256``.
         num_samples (Optional[int]): The number of samples to use. Default: ``None`` uses all available samples.
@@ -187,12 +207,16 @@ def build_streaming_laion_dataloader(
     else:
         center_square_crop = LargestCenterSquare(resize_size)
         transform = transforms.Compose([center_square_crop, transforms.ToTensor(), normalize])
-    
+
+    # TODO remove me
+    streaming.base.util.clean_stale_shared_memory()
+
     dataset = StreamingLAIONDataset(
         streams=streams,
         split=None,
         shuffle=shuffle,
         tokenizer_name_or_path=tokenizer_name_or_path,
+        tokenizer_name_or_path_2=tokenizer_name_or_path_2,
         caption_drop_prob=caption_drop_prob,
         transform=transform,
         predownload=predownload,

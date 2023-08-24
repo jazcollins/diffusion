@@ -5,20 +5,20 @@
 
 import numpy as np
 import torchvision.transforms as transforms
-from torchvision.transforms.functional import crop, pad, get_dimensions
+from torchvision.transforms.functional import crop, get_dimensions
 
 
 def random_crop_params(img, output_size):
     """ Return the parameters for a random crop.
-        Inputs:
-            img: Tensor
-            output_size: int
-        Returns:
-            crop_params: List[int]
 
-        Based off of Algorithm 1 of SDXL paper: https://arxiv.org/pdf/2307.01952.pdf
-        # TODO note: this only works for generating square images since output_size is scalar
-        #  - need to adjust output_size for multi-aspect training!
+    Inputs:
+        img: Tensor
+        output_size: int
+    Returns:
+        crop_params: List[int]
+    Based off of Algorithm 1 of SDXL paper: https://arxiv.org/pdf/2307.01952.pdf
+    # TODO note: this only works for generating square images since output_size is scalar
+    #  - need to adjust output_size for multi-aspect training!
     """
     _, image_height, image_width = get_dimensions(img)
     if image_height == image_width:

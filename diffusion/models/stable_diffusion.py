@@ -34,6 +34,11 @@ class StableDiffusion(ComposerModel):
             noise scheduler. Used during the forward diffusion process (training).
         inference_scheduler (diffusers.SchedulerMixin): HuggingFace diffusers
             noise scheduler. Used during the backward diffusion process (inference).
+        text_encoder_2 (torch.nn.Module, optional): `CLIPTextModelWithProjection` text 
+            encoder. Used in Stable Diffusion XL.
+        tokenizer_2 (transformers.PreTrainedTokenizer, optional): Tokenizer used for
+            text_encoder_2. For a `CLIPTextModel` this will be the
+            `CLIPTokenizer` from HuggingFace transformers. Used in Stable Diffusion XL.
         num_images_per_prompt (int): How many images to generate per prompt
             for evaluation. Default: `1`.
         loss_fn (torch.nn.Module): torch loss function. Default: `F.mse_loss`.
@@ -71,6 +76,8 @@ class StableDiffusion(ComposerModel):
                  tokenizer,
                  noise_scheduler,
                  inference_noise_scheduler,
+                 text_encoder_2 = None,
+                 tokenizer_2 = None,
                  loss_fn=F.mse_loss,
                  prediction_type: str = 'epsilon',
                  train_metrics: Optional[List] = None,
@@ -80,6 +87,7 @@ class StableDiffusion(ComposerModel):
                  loss_bins: Optional[List] = None,
                  image_key: str = 'image',
                  text_key: str = 'captions',
+                 text_key_2: str = 'captions_2',
                  image_latents_key: str = 'image_latents',
                  text_latents_key: str = 'caption_latents',
                  precomputed_latents: bool = False,
@@ -99,6 +107,25 @@ class StableDiffusion(ComposerModel):
         self.image_latents_key = image_latents_key
         self.precomputed_latents = precomputed_latents
         self.sdxl = sdxl
+        if self.sdxl:
+            self.latent_scale = 0.13025
+        else:
+            self.latent_scale = 0.18215
+
+        if self.sdxl: # TODO think about how to better do this, this is gross
+            if text_encoder_2 is not None and tokenizer_2 is not None:
+                self.text_encoder_2 = text_encoder_2
+                self.tokenizer_2 = tokenizer_2
+                # freeze weights
+                self.text_encoder_2.requires_grad_(False)
+                if encode_latents_in_fp16:
+                    self.text_encoder_2.half()
+                if fsdp:
+                    # only wrap models we are training
+                    self.text_encoder_2._fsdp_wrap = False
+            else:
+                self.text_encoder_2 = None
+                raise ValueError(f'Missing text_encoder_2 or tokenizer_2 in SDXL')
 
         # setup metrics
         if train_metrics is None:
@@ -141,6 +168,7 @@ class StableDiffusion(ComposerModel):
         self.tokenizer = tokenizer
         self.inference_scheduler = inference_noise_scheduler
         self.text_key = text_key
+        self.text_key_2 = text_key_2
         self.text_latents_key = text_latents_key
         self.encode_latents_in_fp16 = encode_latents_in_fp16
         # freeze text_encoder during diffusion training
@@ -172,12 +200,17 @@ class StableDiffusion(ComposerModel):
                     # Encode prompt into conditioning vector
                     latents = self.vae.encode(inputs.half())['latent_dist'].sample().data
                     if self.sdxl:
-                        # a la https://github.com/huggingface/diffusers/blob/v0.19.3/src/diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py#L329
-                        text_encoder_out = self.text_encoder(conditioning, output_hidden_states=True)
-                        pooled_conditioning = text_encoder_out[0] # (batch_size, 1280)
-                        conditioning = text_encoder_out.hidden_states[-2] # (batch_size, 77, 1280) 
+                        # first text encoder
+                        conditioning = self.text_encoder(conditioning, output_hidden_states=True)[-2]
+                        # second text encoder
+                        conditioning_2 = batch[self.text_key_2]
+                        text_encoder_2_out = self.text_encoder_2(conditioning_2, output_hidden_states=True)
+                        pooled_conditioning = text_encoder_2_out[0]  # (batch_size, 1280)
+                        conditioning_2 = text_encoder_2_out.hidden_states[-2]  # (batch_size, 77, 1280)
+                        conditioning = torch.concat([conditioning, conditioning_2], dim=-1)
                     else:
                         conditioning = self.text_encoder(conditioning)[0]  # Should be (batch_size, 77, 768)
+                        pooled_conditioning = None
 
             else:
                 latents = self.vae.encode(inputs)['latent_dist'].sample().data
@@ -185,12 +218,12 @@ class StableDiffusion(ComposerModel):
                     assert False, 'NIY'
                     # a la https://github.com/huggingface/diffusers/blob/v0.19.3/src/diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py#L329
                     text_encoder_out = self.text_encoder(conditioning, output_hidden_states=True)
-                    pooled_conditioning = text_encoder_out[0] # (batch_size, 77, 1024)
-                    conditioning = text_encoder_out.hidden_states[-2] # (batch_size, 77, 1024)
+                    pooled_conditioning = text_encoder_out[0]  # (batch_size, 77, 1024)
+                    conditioning = text_encoder_out.hidden_states[-2]  # (batch_size, 77, 1024)
                 else:
                     conditioning = self.text_encoder(conditioning)[0]
             # Magical scaling number (See https://github.com/huggingface/diffusers/issues/437#issuecomment-1241827515)
-            latents *= 0.18215
+            latents *= self.latent_scale
 
         # Sample the diffusion timesteps
         timesteps = torch.randint(0, len(self.noise_scheduler), (latents.shape[0],), device=latents.device)
@@ -207,29 +240,19 @@ class StableDiffusion(ComposerModel):
         else:
             raise ValueError(
                 f'prediction type must be one of sample, epsilon, or v_prediction. Got {self.prediction_type}')
-        
+
         added_cond_kwargs = {}
         # if using SDXL, prepare added time ids & embeddings
         if self.sdxl:
             # TODO double check cond_crops_coords_top_left calc in transforms.py
-            add_time_ids = torch.cat([batch['cond_original_size'], 
-                                      batch['cond_crops_coords_top_left'], 
-                                      batch['cond_target_size']], dim=1)
+            add_time_ids = torch.cat(
+                [batch['cond_original_size'], batch['cond_crops_coords_top_left'], batch['cond_target_size']], dim=1)
             add_text_embeds = pooled_conditioning
-            
-            # dimensionality sanity check
-            add_time_ids_dim = add_time_ids.shape[1]
-            passed_add_embed_dim = self.unet.config.addition_time_embed_dim * add_time_ids_dim + self.text_encoder.config.projection_dim
-            expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
-            if expected_add_embed_dim != passed_add_embed_dim:
-                raise ValueError(
-                    f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
-                )
+            added_cond_kwargs = {'text_embeds': add_text_embeds, 'time_ids': add_time_ids}
 
-            added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
-        
         # Forward through the model
-        return self.unet(noised_latents, timesteps, conditioning, added_cond_kwargs=added_cond_kwargs)['sample'], targets, timesteps
+        return self.unet(noised_latents, timesteps, conditioning,
+                         added_cond_kwargs=added_cond_kwargs)['sample'], targets, timesteps
 
     def loss(self, outputs, batch):
         """Loss between unet output and added noise, typically mse."""
@@ -255,12 +278,16 @@ class StableDiffusion(ComposerModel):
             # Set to resolution we are trying to generate
             batch['cond_target_size'] = torch.tensor([[width, height]]).repeat(bsz, 1).to(device)
 
+            # also need to tokenize prompts
+            prompts_2 = batch[self.text_key_2]
+
         # Get unet outputs
         unet_out, targets, timesteps = self.forward(batch)
-        # Sample images from the prompts in the batch        
+        # Sample images from the prompts in the batch
         generated_images = {}
         for guidance_scale in self.val_guidance_scales:
             gen_images = self.generate(tokenized_prompts=prompts,
+                                       tokenized_prompts_2=prompts_2,
                                        height=height,
                                        width=width,
                                        guidance_scale=guidance_scale,
@@ -312,6 +339,8 @@ class StableDiffusion(ComposerModel):
         # CLIP metrics should be updated with the generated images at the desired guidance scale
         elif metric.__class__.__name__ == 'CLIPScore':
             # Convert the captions to a list of strings
+            if self.sdxl:
+                raise NotImplementedError('need to update for multiple tokenizers')
             captions = [self.tokenizer.decode(caption, skip_special_tokens=True) for caption in batch[self.text_key]]
             generated_images = (outputs[3][metric.guidance_scale] * 255).to(torch.uint8)
             metric.update(generated_images, captions)
@@ -324,6 +353,7 @@ class StableDiffusion(ComposerModel):
         prompt: Optional[list] = None,
         negative_prompt: Optional[list] = None,
         tokenized_prompts: Optional[torch.LongTensor] = None,
+        tokenized_prompts_2: Optional[torch.LongTensor] = None,
         tokenized_negative_prompts: Optional[torch.LongTensor] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
@@ -334,6 +364,8 @@ class StableDiffusion(ComposerModel):
         num_images_per_prompt: Optional[int] = 1,
         seed: Optional[int] = None,
         progress_bar: Optional[bool] = True,
+        crop_params: Optional[list] = None,
+        size_params: Optional[list] = None,
     ):
         """Generates image from noise.
 
@@ -395,51 +427,62 @@ class StableDiffusion(ComposerModel):
 
         do_classifier_free_guidance = guidance_scale > 1.0  # type: ignore
 
-        text_embeddings, pooled_text_embeddings = self._prepare_text_embeddings(prompt, tokenized_prompts, prompt_embeds, num_images_per_prompt)
+        text_embeddings, pooled_text_embeddings = self._prepare_text_embeddings(prompt, tokenized_prompts,
+                                                                                prompt_embeds, num_images_per_prompt,
+                                                                                tokenized_prompts_2=tokenized_prompts_2)
         batch_size = len(text_embeddings)  # len prompts * num_images_per_prompt
         # classifier free guidance + negative prompts
         # negative prompt is given in place of the unconditional input in classifier free guidance
         if do_classifier_free_guidance:
-            negative_prompt = negative_prompt or ([''] * (batch_size // num_images_per_prompt))  # type: ignore
-            unconditional_embeddings, pooled_unconditional_embeddings = self._prepare_text_embeddings(negative_prompt, 
-                                                                     tokenized_negative_prompts, negative_prompt_embeds, num_images_per_prompt)
+            zero_out_negative_prompt = negative_prompt is None # and self.config.force_zeros_for_empty_prompt
+            if negative_prompt_embeds is None and zero_out_negative_prompt:
+                unconditional_embeddings = torch.zeros_like(text_embeddings)
+                pooled_unconditional_embeddings = torch.zeros_like(pooled_text_embeddings)
+            else:
+                negative_prompt = negative_prompt or ([''] * (batch_size // num_images_per_prompt))  # type: ignore
+                unconditional_embeddings, pooled_unconditional_embeddings = self._prepare_text_embeddings(
+                    negative_prompt, tokenized_negative_prompts, negative_prompt_embeds, num_images_per_prompt)
+            
             # concat uncond + prompt
             text_embeddings = torch.cat([unconditional_embeddings, text_embeddings])
             if self.sdxl:
                 pooled_text_embeddings = torch.cat([pooled_unconditional_embeddings, pooled_text_embeddings])
+            else:
+                pooled_text_embeddings = None
+
+            # import pdb;pdb.set_trace()
 
         # prepare for diffusion generation process
         latents = torch.randn(
             (batch_size, self.unet.config.in_channels, height // vae_scale_factor, width // vae_scale_factor),
             device=device,
             generator=rng_generator,
-        )
+        )      
+
+        # torch.save(latents, 'latents.pt')
+        # import pdb;pdb.set_trace()
 
         self.inference_scheduler.set_timesteps(num_inference_steps)
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.inference_scheduler.init_noise_sigma
 
+        # if self.encode_latents_in_fp16:
+        #     latents = latents.half() # gives matmul error :|
+
         added_cond_kwargs = {}
         # if using SDXL, prepare added time ids & embeddings
-        if self.sdxl:
-            cond_original_size = torch.tensor([[width, height]]).repeat(pooled_text_embeddings.shape[0], 1).to(device)
-            cond_crops_coords_top_left = torch.tensor([[0., 0.]]).repeat(pooled_text_embeddings.shape[0], 1).to(device)
-            cond_target_size = torch.tensor([[width, height]]).repeat(pooled_text_embeddings.shape[0], 1).to(device)
-            add_time_ids = torch.cat([cond_original_size, 
-                                      cond_crops_coords_top_left, 
-                                      cond_target_size], dim=1)
+        if self.sdxl and pooled_text_embeddings is not None:
+            if not crop_params:
+                crop_params = [0., 0.]
+            if not size_params:
+                size_params = [width, height]
+            cond_original_size = torch.tensor([[width, height]]).repeat(pooled_text_embeddings.shape[0], 1).to(device).float()
+            cond_crops_coords_top_left = torch.tensor([crop_params]).repeat(pooled_text_embeddings.shape[0], 1).to(device).float()
+            cond_target_size = torch.tensor([size_params]).repeat(pooled_text_embeddings.shape[0], 1).to(device).float()
+            add_time_ids = torch.cat([cond_original_size, cond_crops_coords_top_left, cond_target_size], dim=1).float()
             add_text_embeds = pooled_text_embeddings
-            
-            # dimensionality sanity check
-            add_time_ids_dim = add_time_ids.shape[1]
-            passed_add_embed_dim = self.unet.config.addition_time_embed_dim * add_time_ids_dim + self.text_encoder.config.projection_dim
-            expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
-            if expected_add_embed_dim != passed_add_embed_dim:
-                raise ValueError(
-                    f"Model expects an added time embedding vector of length {expected_add_embed_dim}, but a vector of {passed_add_embed_dim} was created. The model has an incorrect config. Please check `unet.config.time_embedding_type` and `text_encoder_2.config.projection_dim`."
-                )
 
-            added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+            added_cond_kwargs = {'text_embeds': add_text_embeds, 'time_ids': add_time_ids}
 
         # backward diffusion process
         for t in tqdm(self.inference_scheduler.timesteps, disable=not progress_bar):
@@ -450,24 +493,31 @@ class StableDiffusion(ComposerModel):
 
             latent_model_input = self.inference_scheduler.scale_model_input(latent_model_input, t)
             # Model prediction
-            pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings, added_cond_kwargs=added_cond_kwargs).sample
+            # import pdb;pdb.set_trace()
+            pred = self.unet(latent_model_input,
+                             t,
+                             encoder_hidden_states=text_embeddings,
+                             added_cond_kwargs=added_cond_kwargs).sample
 
             if do_classifier_free_guidance:
                 # perform guidance. Note this is only techincally correct for prediction_type 'epsilon'
                 pred_uncond, pred_text = pred.chunk(2)
                 pred = pred_uncond + guidance_scale * (pred_text - pred_uncond)
-
             # compute the previous noisy sample x_t -> x_t-1
+
+            rng_generator = torch.Generator(device=device)
+            rng_generator = rng_generator.manual_seed(1234)  # type: ignore
+
             latents = self.inference_scheduler.step(pred, t, latents, generator=rng_generator).prev_sample
 
         # We now use the vae to decode the generated latents back into the image.
         # scale and decode the image latents with vae
-        latents = 1 / 0.18215 * latents
+        latents = 1 / self.latent_scale * latents
         image = self.vae.decode(latents).sample
         image = (image / 2 + 0.5).clamp(0, 1)
         return image.detach()  # (batch*num_images_per_prompt, channel, h, w)
 
-    def _prepare_text_embeddings(self, prompt, tokenized_prompts, prompt_embeds, num_images_per_prompt):
+    def _prepare_text_embeddings(self, prompt, tokenized_prompts, prompt_embeds, num_images_per_prompt, tokenized_prompts_2=None):
         """Tokenizes and embeds prompts if needed, then duplicates embeddings to support multiple generations per prompt."""
         device = self.text_encoder.device
         if prompt_embeds is None:
@@ -477,10 +527,21 @@ class StableDiffusion(ComposerModel):
                                                    max_length=self.tokenizer.model_max_length,
                                                    truncation=True,
                                                    return_tensors='pt').input_ids
+                if self.sdxl:
+                    tokenized_prompts_2 = self.tokenizer_2(prompt,
+                                                        padding='max_length',
+                                                        max_length=self.tokenizer_2.model_max_length,
+                                                        truncation=True,
+                                                        return_tensors='pt').input_ids
             if self.sdxl:
-                text_encoder_out = self.text_encoder(tokenized_prompts.to(device), output_hidden_states=True)
-                pooled_text_embeddings = text_encoder_out[0] # (batch_size, 1280)
-                text_embeddings = text_encoder_out.hidden_states[-2] # (batch_size, 77, 1280)
+                # text encoder 1
+                text_embeddings = self.text_encoder(tokenized_prompts.to(device), output_hidden_states=True).hidden_states[-2]
+                # text encoder 2
+                text_encoder_2_out = self.text_encoder_2(tokenized_prompts_2.to(device), output_hidden_states=True)
+                pooled_text_embeddings = text_encoder_2_out[0]  # (batch_size, 1280)
+                text_embeddings_2 = text_encoder_2_out.hidden_states[-2]  # (batch_size, 77, 1280)
+                # concat
+                text_embeddings = torch.concat([text_embeddings, text_embeddings_2], dim=-1)
             else:
                 text_embeddings = self.text_encoder(tokenized_prompts.to(device))[0]  # type: ignore
                 pooled_text_embeddings = None
@@ -490,11 +551,11 @@ class StableDiffusion(ComposerModel):
                 assert False, 'NIY'
 
         # duplicate text embeddings for each generation per prompt
-        bs_embed, seq_len, _ = text_embeddings.shape # [2, 77, 1280]
+        bs_embed, seq_len, _ = text_embeddings.shape  # [2, 77, 1280]
         text_embeddings = text_embeddings.repeat(1, num_images_per_prompt, 1)  # type: ignore
         text_embeddings = text_embeddings.view(bs_embed * num_images_per_prompt, seq_len, -1)
 
-        if self.sdxl:
+        if self.sdxl and pooled_text_embeddings is not None:
             # TODO double check this - original size: [2, 1280]
             pooled_text_embeddings = pooled_text_embeddings.repeat(1, num_images_per_prompt)
             pooled_text_embeddings = pooled_text_embeddings.view(bs_embed * num_images_per_prompt, -1)

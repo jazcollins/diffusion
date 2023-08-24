@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import torch
 from composer.devices import DeviceGPU
-from diffusers import AutoencoderKL, DDIMScheduler, DDPMScheduler, UNet2DConditionModel
+from diffusers import AutoencoderKL, DDIMScheduler, DDPMScheduler, UNet2DConditionModel, EulerDiscreteScheduler
 from torchmetrics import MeanSquaredError
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.multimodal.clip_score import CLIPScore
@@ -48,9 +48,9 @@ def stable_diffusion_xl(
     Args:
         model_name (str, optional): Name of the model to load. Determines the text encoder used.
             Defaults to 'stabilityai/stable-diffusion-xl-base-1.0'.
-        unet_model_name (str, optional): Name of the UNet model to load. Defaults to 
+        unet_model_name (str, optional): Name of the UNet model to load. Defaults to
             'stabilityai/stable-diffusion-xl-base-1.0'.
-        vae_model_name (str, optional): Name of the VAE model to load. Defaults to 
+        vae_model_name (str, optional): Name of the VAE model to load. Defaults to
             'madebyollin/sdxl-vae-fp16-fix' (SDXL VAE).
         pretrained (bool, optional): Whether to load pretrained weights. Defaults to True.
         prediction_type (str): The type of prediction to use. Must be one of 'sample',
@@ -95,54 +95,55 @@ def stable_diffusion_xl(
         # unet = UNet2DConditionModel(**config[0])
 
         # smaller SDXL-style unet for debugging
-        unet = UNet2DConditionModel(act_fn='silu',
-                                    addition_embed_type = 'text_time',
-                                    addition_embed_type_num_heads = 64,
-                                    addition_time_embed_dim = 256,
-                                    attention_head_dim=[5, 10, 20],
-                                    block_out_channels=[32, 32, 1280], # make smaller and more manageable for local debug,
-                                    # block_out_channels=[320, 640, 1280],
-                                    center_input_sample=False, 
-                                    class_embed_type=None, 
-                                    class_embeddings_concat=False, 
-                                    conv_in_kernel=3, 
-                                    conv_out_kernel=3, 
-                                    cross_attention_dim=1280, # 2048, default (2048) - 1280 = 768 (other text encoder dim)
-                                    cross_attention_norm=None, 
-                                    down_block_types=['DownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D'], 
-                                    downsample_padding=1, 
-                                    dual_cross_attention=False, 
-                                    encoder_hid_dim=None, 
-                                    encoder_hid_dim_type=None, 
-                                    flip_sin_to_cos=True, 
-                                    freq_shift=0, 
-                                    in_channels=4, 
-                                    layers_per_block=2, 
-                                    mid_block_only_cross_attention=None, 
-                                    mid_block_scale_factor=1, 
-                                    mid_block_type='UNetMidBlock2DCrossAttn', 
-                                    norm_eps=1e-05, 
-                                    norm_num_groups=32, 
-                                    num_attention_heads=None, 
-                                    num_class_embeds=None, 
-                                    only_cross_attention=False, 
-                                    out_channels=4,
-                                    projection_class_embeddings_input_dim=2816, # assuming use of text_encoder_2 
-                                    resnet_out_scale_factor=1.0, 
-                                    resnet_skip_time_act=False, 
-                                    resnet_time_scale_shift='default', 
-                                    sample_size=128, 
-                                    time_cond_proj_dim=None, 
-                                    time_embedding_act_fn=None,
-                                    time_embedding_dim=None, 
-                                    time_embedding_type='positional', 
-                                    timestep_post_act=None,
-                                    transformer_layers_per_block=[1, 2, 10], 
-                                    up_block_types=['CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'UpBlock2D'], 
-                                    upcast_attention=None, 
-                                    use_linear_projection=True)
+        unet = UNet2DConditionModel(
+            act_fn='silu',
+            addition_embed_type='text_time',
+            addition_embed_type_num_heads=64,
+            addition_time_embed_dim=256,
+            attention_head_dim=[5, 10, 20],
+            block_out_channels=[32, 32, 1280],  # make smaller and more manageable for local debug,
+            # block_out_channels=[320, 640, 1280],
+            center_input_sample=False,
+            class_embed_type=None,
+            class_embeddings_concat=False,
+            conv_in_kernel=3,
+            conv_out_kernel=3,
+            cross_attention_dim=1280,  # 2048, default (2048) - 1280 = 768 (other text encoder dim)
+            cross_attention_norm=None,
+            down_block_types=['DownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D'],
+            downsample_padding=1,
+            dual_cross_attention=False,
+            encoder_hid_dim=None,
+            encoder_hid_dim_type=None,
+            flip_sin_to_cos=True,
+            freq_shift=0,
+            in_channels=4,
+            layers_per_block=2,
+            mid_block_only_cross_attention=None,
+            mid_block_scale_factor=1,
+            mid_block_type='UNetMidBlock2DCrossAttn',
+            norm_eps=1e-05,
+            norm_num_groups=32,
+            num_attention_heads=None,
+            num_class_embeds=None,
+            only_cross_attention=False,
+            out_channels=4,
+            projection_class_embeddings_input_dim=2816,  # assuming use of text_encoder_2
+            resnet_out_scale_factor=1.0,
+            resnet_skip_time_act=False,
+            resnet_time_scale_shift='default',
+            sample_size=128,
+            time_cond_proj_dim=None,
+            time_embedding_act_fn=None,
+            time_embedding_dim=None,
+            time_embedding_type='positional',
+            timestep_post_act=None,
+            transformer_layers_per_block=[1, 2, 10],
+            up_block_types=['CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'UpBlock2D'],
+            upcast_attention=None,
+            use_linear_projection=True)
 
-    if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
+    if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0':  # SDXL
         # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
         unet.up_blocks._fsdp_wrap = False
         unet.down_blocks._fsdp_wrap = False
@@ -151,31 +152,28 @@ def stable_diffusion_xl(
         for block in unet.down_blocks:
             block._fsdp_wrap = True
 
-
     if encode_latents_in_fp16:
-        try: 
+        try:
             vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae', torch_dtype=torch.float16)
-        except: # for handling SDXL vae fp16 fixed checkpoint
+        except:  # for handling SDXL vae fp16 fixed checkpoint
             vae = AutoencoderKL.from_pretrained(vae_model_name, torch_dtype=torch.float16)
-        # text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder', torch_dtype=torch.float16)
-        text_encoder = CLIPTextModelWithProjection.from_pretrained(model_name, subfolder='text_encoder_2', torch_dtype=torch.float16)
+        text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder', torch_dtype=torch.float16)
+        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(model_name,
+                                                                     subfolder='text_encoder_2',
+                                                                     torch_dtype=torch.float16)
         # import pdb;pdb.set_trace()
     else:
-        vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae')
-        # text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder')
-        text_encoder = CLIPTextModelWithProjection.from_pretrained(model_name, subfolder='text_encoder_2')
+        try:
+            vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae')
+        except: #  for handling SDXL vae fp16 fixed checkpoint
+            vae = AutoencoderKL.from_pretrained(vae_model_name)
+        text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder')
+        text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(model_name, subfolder='text_encoder_2')
 
-    # tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer')
-    tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer_2')
-    noise_scheduler = DDPMScheduler.from_pretrained(model_name, subfolder='scheduler')
-    inference_noise_scheduler = DDIMScheduler(num_train_timesteps=noise_scheduler.config.num_train_timesteps,
-                                              beta_start=noise_scheduler.config.beta_start,
-                                              beta_end=noise_scheduler.config.beta_end,
-                                              beta_schedule=noise_scheduler.config.beta_schedule,
-                                              trained_betas=noise_scheduler.config.trained_betas,
-                                              clip_sample=noise_scheduler.config.clip_sample,
-                                              set_alpha_to_one=noise_scheduler.config.set_alpha_to_one,
-                                              prediction_type=prediction_type)
+    tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer')
+    tokenizer_2 = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer_2')
+    noise_scheduler = EulerDiscreteScheduler.from_pretrained(model_name, subfolder='scheduler')
+    inference_noise_scheduler = EulerDiscreteScheduler.from_pretrained(model_name, subfolder='scheduler')
 
     model = StableDiffusion(
         unet=unet,
@@ -184,6 +182,8 @@ def stable_diffusion_xl(
         tokenizer=tokenizer,
         noise_scheduler=noise_scheduler,
         inference_noise_scheduler=inference_noise_scheduler,
+        text_encoder_2=text_encoder_2,
+        tokenizer_2=tokenizer_2,
         prediction_type=prediction_type,
         train_metrics=train_metrics,
         val_metrics=val_metrics,
@@ -226,9 +226,9 @@ def stable_diffusion_2(
     Args:
         model_name (str, optional): Name of the model to load. Determines the text encoder and autoencder.
             Defaults to 'stabilityai/stable-diffusion-2-base'.
-        unet_model_name (str, optional): Name of the UNet model to load. Defaults to 
+        unet_model_name (str, optional): Name of the UNet model to load. Defaults to
             'stabilityai/stable-diffusion-2-base'.
-        vae_model_name (str, optional): Name of the VAE model to load. Defaults to 
+        vae_model_name (str, optional): Name of the VAE model to load. Defaults to
             'stabilityai/stable-diffusion-2-base'.
         pretrained (bool, optional): Whether to load pretrained weights. Defaults to True.
         prediction_type (str): The type of prediction to use. Must be one of 'sample',
@@ -264,14 +264,14 @@ def stable_diffusion_2(
     else:
         config = PretrainedConfig.get_config_dict(unet_model_name, subfolder='unet')
 
-        if unet_model_name == 'stabilityai/stable-diffusion-xl-refiner-1.0' or unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
+        if unet_model_name == 'stabilityai/stable-diffusion-xl-refiner-1.0' or unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0':  # SDXL
             print('using SDXL unet!')
             config[0]['addition_embed_type'] = None
             config[0]['cross_attention_dim'] = 1024
 
         unet = UNet2DConditionModel(**config[0])
 
-    if unet_model_name == 'stabilityai/stable-diffusion-xl-refiner-1.0' or unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
+    if unet_model_name == 'stabilityai/stable-diffusion-xl-refiner-1.0' or unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0':  # SDXL
         # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
         unet.up_blocks._fsdp_wrap = False
         unet.down_blocks._fsdp_wrap = False
@@ -280,11 +280,10 @@ def stable_diffusion_2(
         for block in unet.down_blocks:
             block._fsdp_wrap = True
 
-
     if encode_latents_in_fp16:
-        try: 
+        try:
             vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae', torch_dtype=torch.float16)
-        except: # for handling SDXL vae fp16 fixed checkpoint
+        except:  # for handling SDXL vae fp16 fixed checkpoint
             vae = AutoencoderKL.from_pretrained(vae_model_name, torch_dtype=torch.float16)
         text_encoder = CLIPTextModel.from_pretrained(model_name, subfolder='text_encoder', torch_dtype=torch.float16)
     else:
