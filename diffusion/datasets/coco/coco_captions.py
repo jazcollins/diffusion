@@ -52,10 +52,12 @@ class StreamingCOCOCaption(StreamingDataset):
         shuffle,
         batch_size,
         tokenizer_name_or_path='stabilityai/stable-diffusion-2-base',
+        tokenizer_name_or_path_2: Optional[str] = None,
         caption_selection='first',
         download_timeout=120,
         transform=None,
         num_canonical_nodes: Optional[int] = None,
+        sdxl: bool = False,
     ):
         super().__init__(
             remote=remote,
@@ -66,8 +68,15 @@ class StreamingCOCOCaption(StreamingDataset):
             num_canonical_nodes=num_canonical_nodes,
         )
         self.tokenizer = CLIPTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
+        if sdxl:
+            if tokenizer_name_or_path_2:
+                self.tokenizer_2 = CLIPTokenizer.from_pretrained(tokenizer_name_or_path_2, subfolder='tokenizer_2')
+            else:
+                raise ValueError('Must provide value for tokenizer_name_or_path_2')
         self.transform = transform
         self.caption_selection = caption_selection.lower()
+        self.sdxl = sdxl
+
         if caption_selection not in ['random', 'first']:
             raise ValueError(f'Invalid caption selection: {caption_selection}. Must be one of [random, first]')
 
@@ -86,19 +95,31 @@ class StreamingCOCOCaption(StreamingDataset):
             captions = random.sample(sample['captions'], k=1)[0]
         else:
             raise ValueError(f'Invalid caption selection: {self.caption_selection}. Must be one of [random, first].')
-        captions = self.tokenizer(captions, padding='max_length', truncation=True, return_tensors='pt')['input_ids'][0]
-        return {'image': image, 'captions': captions}
+        tokenized_captions = self.tokenizer(captions, padding='max_length', truncation=True, return_tensors='pt')['input_ids'][0]
+        out = {'image': image, 'captions': tokenized_captions}
+        if self.sdxl:
+            tokenized_caption_2 = self.tokenizer_2(
+                captions,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )['input_ids'][0]
+            out['captions_2'] = tokenized_caption_2
+        return out
 
 
 def build_streaming_cocoval_dataloader(
     batch_size: int,
     remote: str,
+    tokenizer_name_or_path: str = 'stabilityai/stable-diffusion-2-base',
+    tokenizer_name_or_path_2: Optional[str] = None,
     local: str = '/tmp/mds-cache/mds-coco-val/',
     shuffle: bool = False,
     resize_size: int = 512,
     use_crop: bool = False,
     caption_selection='first',
     num_canonical_nodes: Optional[int] = None,
+    sdxl: bool = False,
     **dataloader_kwargs,
 ):
     """Builds a streaming dataloader for the COCO validation set."""
@@ -112,9 +133,12 @@ def build_streaming_cocoval_dataloader(
         local=local,
         shuffle=shuffle,
         batch_size=batch_size,
+        tokenizer_name_or_path=tokenizer_name_or_path,
+        tokenizer_name_or_path_2=tokenizer_name_or_path_2,
         caption_selection=caption_selection,
         transform=transform,
         num_canonical_nodes=num_canonical_nodes,
+        sdxl=sdxl,
     )
 
     dataloader = DataLoader(dataset=dataset, batch_size=batch_size, drop_last=False, **dataloader_kwargs)

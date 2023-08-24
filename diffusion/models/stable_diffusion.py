@@ -199,11 +199,13 @@ class StableDiffusion(ComposerModel):
                     # Encode the images to the latent space.
                     # Encode prompt into conditioning vector
                     latents = self.vae.encode(inputs.half())['latent_dist'].sample().data
+
                     if self.sdxl:
                         # first text encoder
-                        conditioning = self.text_encoder(conditioning, output_hidden_states=True)[-2]
+                        conditioning = self.text_encoder(conditioning, output_hidden_states=True).hidden_states[-2]
                         # second text encoder
                         conditioning_2 = batch[self.text_key_2]
+                        conditioning_2 = conditioning_2.view(-1, conditioning_2.shape[-1])
                         text_encoder_2_out = self.text_encoder_2(conditioning_2, output_hidden_states=True)
                         pooled_conditioning = text_encoder_2_out[0]  # (batch_size, 1280)
                         conditioning_2 = text_encoder_2_out.hidden_states[-2]  # (batch_size, 77, 1280)

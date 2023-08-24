@@ -83,8 +83,9 @@ def stable_diffusion_xl(
 
     if pretrained:
         unet = UNet2DConditionModel.from_pretrained(unet_model_name, subfolder='unet')
+
     else:
-        # config = PretrainedConfig.get_config_dict(unet_model_name, subfolder='unet')
+        config = PretrainedConfig.get_config_dict(unet_model_name, subfolder='unet')
 
         # if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
         #     print('using SDXL unet!')
@@ -92,56 +93,56 @@ def stable_diffusion_xl(
         #     config[0]['addition_embed_type'] = None
         #     config[0]['cross_attention_dim'] = 1024
 
-        # unet = UNet2DConditionModel(**config[0])
+        unet = UNet2DConditionModel(**config[0])
 
-        # smaller SDXL-style unet for debugging
-        unet = UNet2DConditionModel(
-            act_fn='silu',
-            addition_embed_type='text_time',
-            addition_embed_type_num_heads=64,
-            addition_time_embed_dim=256,
-            attention_head_dim=[5, 10, 20],
-            block_out_channels=[32, 32, 1280],  # make smaller and more manageable for local debug,
-            # block_out_channels=[320, 640, 1280],
-            center_input_sample=False,
-            class_embed_type=None,
-            class_embeddings_concat=False,
-            conv_in_kernel=3,
-            conv_out_kernel=3,
-            cross_attention_dim=1280,  # 2048, default (2048) - 1280 = 768 (other text encoder dim)
-            cross_attention_norm=None,
-            down_block_types=['DownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D'],
-            downsample_padding=1,
-            dual_cross_attention=False,
-            encoder_hid_dim=None,
-            encoder_hid_dim_type=None,
-            flip_sin_to_cos=True,
-            freq_shift=0,
-            in_channels=4,
-            layers_per_block=2,
-            mid_block_only_cross_attention=None,
-            mid_block_scale_factor=1,
-            mid_block_type='UNetMidBlock2DCrossAttn',
-            norm_eps=1e-05,
-            norm_num_groups=32,
-            num_attention_heads=None,
-            num_class_embeds=None,
-            only_cross_attention=False,
-            out_channels=4,
-            projection_class_embeddings_input_dim=2816,  # assuming use of text_encoder_2
-            resnet_out_scale_factor=1.0,
-            resnet_skip_time_act=False,
-            resnet_time_scale_shift='default',
-            sample_size=128,
-            time_cond_proj_dim=None,
-            time_embedding_act_fn=None,
-            time_embedding_dim=None,
-            time_embedding_type='positional',
-            timestep_post_act=None,
-            transformer_layers_per_block=[1, 2, 10],
-            up_block_types=['CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'UpBlock2D'],
-            upcast_attention=None,
-            use_linear_projection=True)
+        # # smaller SDXL-style unet for debugging
+        # unet = UNet2DConditionModel(
+        #     act_fn='silu',
+        #     addition_embed_type='text_time',
+        #     addition_embed_type_num_heads=64,
+        #     addition_time_embed_dim=256,
+        #     attention_head_dim=[5, 10, 20],
+        #     block_out_channels=[32, 32, 1280],  # make smaller and more manageable for local debug,
+        #     # block_out_channels=[320, 640, 1280],
+        #     center_input_sample=False,
+        #     class_embed_type=None,
+        #     class_embeddings_concat=False,
+        #     conv_in_kernel=3,
+        #     conv_out_kernel=3,
+        #     cross_attention_dim=2048,
+        #     cross_attention_norm=None,
+        #     down_block_types=['DownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D'],
+        #     downsample_padding=1,
+        #     dual_cross_attention=False,
+        #     encoder_hid_dim=None,
+        #     encoder_hid_dim_type=None,
+        #     flip_sin_to_cos=True,
+        #     freq_shift=0,
+        #     in_channels=4,
+        #     layers_per_block=2,
+        #     mid_block_only_cross_attention=None,
+        #     mid_block_scale_factor=1,
+        #     mid_block_type='UNetMidBlock2DCrossAttn',
+        #     norm_eps=1e-05,
+        #     norm_num_groups=32,
+        #     num_attention_heads=None,
+        #     num_class_embeds=None,
+        #     only_cross_attention=False,
+        #     out_channels=4,
+        #     projection_class_embeddings_input_dim=2816,  # assuming use of text_encoder_2
+        #     resnet_out_scale_factor=1.0,
+        #     resnet_skip_time_act=False,
+        #     resnet_time_scale_shift='default',
+        #     sample_size=128,
+        #     time_cond_proj_dim=None,
+        #     time_embedding_act_fn=None,
+        #     time_embedding_dim=None,
+        #     time_embedding_type='positional',
+        #     timestep_post_act=None,
+        #     transformer_layers_per_block=[1, 2, 10],
+        #     up_block_types=['CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'UpBlock2D'],
+        #     upcast_attention=None,
+        #     use_linear_projection=True)
 
     if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0':  # SDXL
         # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
@@ -324,7 +325,6 @@ def stable_diffusion_2(
             model.unet.enable_xformers_memory_efficient_attention()
             model.vae.enable_xformers_memory_efficient_attention()
     return model
-
 
 
 def discrete_pixel_diffusion(clip_model_name: str = 'openai/clip-vit-large-patch14', prediction_type='epsilon'):
