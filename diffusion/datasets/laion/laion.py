@@ -208,9 +208,6 @@ def build_streaming_laion_dataloader(
         center_square_crop = LargestCenterSquare(resize_size)
         transform = transforms.Compose([center_square_crop, transforms.ToTensor(), normalize])
 
-    # TODO remove me
-    streaming.base.util.clean_stale_shared_memory()
-
     dataset = StreamingLAIONDataset(
         streams=streams,
         split=None,
