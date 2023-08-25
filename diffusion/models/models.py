@@ -144,7 +144,7 @@ def stable_diffusion_xl(
         #     upcast_attention=None,
         #     use_linear_projection=True)
 
-    if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0':  # SDXL
+    if fsdp:  # SDXL
         # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
         unet.up_blocks._fsdp_wrap = False
         unet.down_blocks._fsdp_wrap = False
