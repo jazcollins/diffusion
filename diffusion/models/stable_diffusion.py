@@ -112,21 +112,6 @@ class StableDiffusion(ComposerModel):
         else:
             self.latent_scale = 0.18215
 
-        if self.sdxl: # TODO think about how to better do this, this is gross
-            if text_encoder_2 is not None and tokenizer_2 is not None:
-                self.text_encoder_2 = text_encoder_2
-                self.tokenizer_2 = tokenizer_2
-                # freeze weights
-                self.text_encoder_2.requires_grad_(False)
-                if encode_latents_in_fp16:
-                    self.text_encoder_2.half()
-                if fsdp:
-                    # only wrap models we are training
-                    self.text_encoder_2._fsdp_wrap = False
-            else:
-                self.text_encoder_2 = None
-                raise ValueError(f'Missing text_encoder_2 or tokenizer_2 in SDXL')
-
         # setup metrics
         if train_metrics is None:
             self.train_metrics = [MeanSquaredError()]
@@ -166,6 +151,12 @@ class StableDiffusion(ComposerModel):
 
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
+        if self.sdxl:
+            if text_encoder_2 is not None and tokenizer_2 is not None:
+                self.text_encoder_2 = text_encoder_2
+                self.tokenizer_2 = tokenizer_2
+            else:
+                raise ValueError(f'Missing text_encoder_2 or tokenizer_2 in SDXL')
         self.inference_scheduler = inference_noise_scheduler
         self.text_key = text_key
         self.text_key_2 = text_key_2
@@ -174,14 +165,20 @@ class StableDiffusion(ComposerModel):
         # freeze text_encoder during diffusion training
         self.text_encoder.requires_grad_(False)
         self.vae.requires_grad_(False)
+        if self.sdxl:
+            self.text_encoder_2.requires_grad_(False)
         if self.encode_latents_in_fp16:
             self.text_encoder.half()
             self.vae.half()
+            if self.sdxl:
+                self.text_encoder_2.half()
         if fsdp:
             # only wrap models we are training
             self.text_encoder._fsdp_wrap = False
             self.vae._fsdp_wrap = False
             self.unet._fsdp_wrap = True
+            if self.sdxl:
+                self.text_encoder_2._fsdp_wrap = False
 
     def forward(self, batch):
         latents, conditioning = None, None
@@ -192,6 +189,7 @@ class StableDiffusion(ComposerModel):
             latents, conditioning = batch[self.image_latents_key], batch[self.text_latents_key]
         else:
             inputs, conditioning = batch[self.image_key], batch[self.text_key]
+            # TODO should we mask empty captions during training?
             conditioning = conditioning.view(-1, conditioning.shape[-1])
             if self.encode_latents_in_fp16:
                 # Disable autocast context as models are in fp16
@@ -217,13 +215,18 @@ class StableDiffusion(ComposerModel):
             else:
                 latents = self.vae.encode(inputs)['latent_dist'].sample().data
                 if self.sdxl:
-                    assert False, 'NIY'
-                    # a la https://github.com/huggingface/diffusers/blob/v0.19.3/src/diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py#L329
-                    text_encoder_out = self.text_encoder(conditioning, output_hidden_states=True)
-                    pooled_conditioning = text_encoder_out[0]  # (batch_size, 77, 1024)
-                    conditioning = text_encoder_out.hidden_states[-2]  # (batch_size, 77, 1024)
+                    # first text encoder
+                    conditioning = self.text_encoder(conditioning, output_hidden_states=True).hidden_states[-2]
+                    # second text encoder
+                    conditioning_2 = batch[self.text_key_2]
+                    conditioning_2 = conditioning_2.view(-1, conditioning_2.shape[-1])
+                    text_encoder_2_out = self.text_encoder_2(conditioning_2, output_hidden_states=True)
+                    pooled_conditioning = text_encoder_2_out[0]  # (batch_size, 1280)
+                    conditioning_2 = text_encoder_2_out.hidden_states[-2]  # (batch_size, 77, 1280)
+                    conditioning = torch.concat([conditioning, conditioning_2], dim=-1)
                 else:
                     conditioning = self.text_encoder(conditioning)[0]
+                    pooled_conditioning = None
             # Magical scaling number (See https://github.com/huggingface/diffusers/issues/437#issuecomment-1241827515)
             latents *= self.latent_scale
 
@@ -253,6 +256,11 @@ class StableDiffusion(ComposerModel):
             added_cond_kwargs = {'text_embeds': add_text_embeds, 'time_ids': add_time_ids}
 
         # Forward through the model
+        print('noised_latents', noised_latents.shape) 
+        print('timesteps', timesteps.shape) 
+        print('conditioning', conditioning.shape) 
+        for key in added_cond_kwargs:
+            print(key, added_cond_kwargs[key].shape)
         return self.unet(noised_latents, timesteps, conditioning,
                          added_cond_kwargs=added_cond_kwargs)['sample'], targets, timesteps
 
@@ -265,10 +273,10 @@ class StableDiffusion(ComposerModel):
         # Skip this if outputs have already been computed, e.g. during training
         if outputs is not None:
             return outputs
-        
+
         prompts = batch[self.text_key]
         height, width = batch[self.image_key].shape[-2], batch[self.image_key].shape[-1]
-        
+
         # If SDXL, add eval-time micro-conditioning to batch
         if self.sdxl:
             device = self.unet.device
@@ -284,6 +292,9 @@ class StableDiffusion(ComposerModel):
             prompts_2 = batch[self.text_key_2]
 
         # Get unet outputs
+        for key in batch:
+            print(key, batch[key].shape)
+        # import pdb;pdb.set_trace()
         unet_out, targets, timesteps = self.forward(batch)
         # Sample images from the prompts in the batch
         generated_images = {}
@@ -415,6 +426,8 @@ class StableDiffusion(ComposerModel):
         _check_prompt_lenths(tokenized_prompts, tokenized_negative_prompts)
         _check_prompt_lenths(prompt_embeds, negative_prompt_embeds)
 
+        # TODO update fxn signature for all other cases
+
         # Create rng for the generation
         device = self.vae.device
         rng_generator = torch.Generator(device=device)
@@ -451,8 +464,6 @@ class StableDiffusion(ComposerModel):
                 pooled_text_embeddings = torch.cat([pooled_unconditional_embeddings, pooled_text_embeddings])
             else:
                 pooled_text_embeddings = None
-
-            # import pdb;pdb.set_trace()
 
         # prepare for diffusion generation process
         latents = torch.randn(
@@ -550,7 +561,7 @@ class StableDiffusion(ComposerModel):
         else:
             text_embeddings = prompt_embeds
             if self.sdxl:
-                assert False, 'NIY'
+                assert False, 'NIY' # because need pooled text embed too
 
         # duplicate text embeddings for each generation per prompt
         bs_embed, seq_len, _ = text_embeddings.shape  # [2, 77, 1280]

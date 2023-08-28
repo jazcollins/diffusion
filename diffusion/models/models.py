@@ -87,11 +87,8 @@ def stable_diffusion_xl(
     else:
         config = PretrainedConfig.get_config_dict(unet_model_name, subfolder='unet')
 
-        # if unet_model_name == 'stabilityai/stable-diffusion-xl-base-1.0': # SDXL
-        #     print('using SDXL unet!')
-        #     # TODO this can probably be different!!!
-        #     config[0]['addition_embed_type'] = None
-        #     config[0]['cross_attention_dim'] = 1024
+        # note: local only
+        # config[0]['block_out_channels'] = [32, 32, 1280]  # make smaller and more manageable for local debug
 
         unet = UNet2DConditionModel(**config[0])
 
@@ -102,7 +99,7 @@ def stable_diffusion_xl(
         #     addition_embed_type_num_heads=64,
         #     addition_time_embed_dim=256,
         #     attention_head_dim=[5, 10, 20],
-        #     block_out_channels=[32, 32, 1280],  # make smaller and more manageable for local debug,
+        #     block_out_channels=[32, 64, 1280],  # make smaller and more manageable for local debug,
         #     # block_out_channels=[320, 640, 1280],
         #     center_input_sample=False,
         #     class_embed_type=None,
@@ -149,9 +146,9 @@ def stable_diffusion_xl(
         unet.up_blocks._fsdp_wrap = False
         unet.down_blocks._fsdp_wrap = False
         for block in unet.up_blocks:
-            block._fsdp_wrap = True
+            block._fsdp_wrap = False # True
         for block in unet.down_blocks:
-            block._fsdp_wrap = True
+            block._fsdp_wrap = False # True
 
     if encode_latents_in_fp16:
         try:
@@ -173,6 +170,7 @@ def stable_diffusion_xl(
 
     tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer')
     tokenizer_2 = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer_2')
+    # noise_scheduler = DDPMScheduler.from_pretrained(model_name, subfolder='scheduler')
     noise_scheduler = EulerDiscreteScheduler.from_pretrained(model_name, subfolder='scheduler')
     inference_noise_scheduler = EulerDiscreteScheduler.from_pretrained(model_name, subfolder='scheduler')
 
@@ -201,6 +199,7 @@ def stable_diffusion_xl(
         if is_xformers_installed:
             model.unet.enable_xformers_memory_efficient_attention()
             model.vae.enable_xformers_memory_efficient_attention()
+        # print('RE-ENABLE XFORMERS')
     return model
 
 
