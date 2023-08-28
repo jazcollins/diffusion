@@ -256,11 +256,6 @@ class StableDiffusion(ComposerModel):
             added_cond_kwargs = {'text_embeds': add_text_embeds, 'time_ids': add_time_ids}
 
         # Forward through the model
-        print('noised_latents', noised_latents.shape) 
-        print('timesteps', timesteps.shape) 
-        print('conditioning', conditioning.shape) 
-        for key in added_cond_kwargs:
-            print(key, added_cond_kwargs[key].shape)
         return self.unet(noised_latents, timesteps, conditioning,
                          added_cond_kwargs=added_cond_kwargs)['sample'], targets, timesteps
 
@@ -292,9 +287,6 @@ class StableDiffusion(ComposerModel):
             prompts_2 = batch[self.text_key_2]
 
         # Get unet outputs
-        for key in batch:
-            print(key, batch[key].shape)
-        # import pdb;pdb.set_trace()
         unet_out, targets, timesteps = self.forward(batch)
         # Sample images from the prompts in the batch
         generated_images = {}
@@ -470,10 +462,7 @@ class StableDiffusion(ComposerModel):
             (batch_size, self.unet.config.in_channels, height // vae_scale_factor, width // vae_scale_factor),
             device=device,
             generator=rng_generator,
-        )      
-
-        # torch.save(latents, 'latents.pt')
-        # import pdb;pdb.set_trace()
+        )
 
         self.inference_scheduler.set_timesteps(num_inference_steps)
         # scale the initial noise by the standard deviation required by the scheduler
@@ -506,7 +495,6 @@ class StableDiffusion(ComposerModel):
 
             latent_model_input = self.inference_scheduler.scale_model_input(latent_model_input, t)
             # Model prediction
-            # import pdb;pdb.set_trace()
             pred = self.unet(latent_model_input,
                              t,
                              encoder_hidden_states=text_embeddings,
