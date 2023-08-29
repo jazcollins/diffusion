@@ -146,9 +146,9 @@ def stable_diffusion_xl(
         unet.up_blocks._fsdp_wrap = False
         unet.down_blocks._fsdp_wrap = False
         for block in unet.up_blocks:
-            block._fsdp_wrap = False # True
+            block._fsdp_wrap = True
         for block in unet.down_blocks:
-            block._fsdp_wrap = False # True
+            block._fsdp_wrap = True
 
     if encode_latents_in_fp16:
         try:
