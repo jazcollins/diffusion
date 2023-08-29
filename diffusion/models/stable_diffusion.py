@@ -176,7 +176,7 @@ class StableDiffusion(ComposerModel):
             # only wrap models we are training
             self.text_encoder._fsdp_wrap = False
             self.vae._fsdp_wrap = False
-            self.unet._fsdp_wrap = True
+            self.unet._fsdp_wrap = False
             if self.sdxl:
                 self.text_encoder_2._fsdp_wrap = False
 
@@ -444,7 +444,10 @@ class StableDiffusion(ComposerModel):
             zero_out_negative_prompt = negative_prompt is None # and self.config.force_zeros_for_empty_prompt
             if negative_prompt_embeds is None and zero_out_negative_prompt:
                 unconditional_embeddings = torch.zeros_like(text_embeddings)
-                pooled_unconditional_embeddings = torch.zeros_like(pooled_text_embeddings)
+                if pooled_text_embeddings:
+                    pooled_unconditional_embeddings = torch.zeros_like(pooled_text_embeddings)
+                else:
+                    pooled_unconditional_embeddings = None
             else:
                 negative_prompt = negative_prompt or ([''] * (batch_size // num_images_per_prompt))  # type: ignore
                 unconditional_embeddings, pooled_unconditional_embeddings = self._prepare_text_embeddings(
