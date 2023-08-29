@@ -444,7 +444,7 @@ class StableDiffusion(ComposerModel):
             zero_out_negative_prompt = negative_prompt is None # and self.config.force_zeros_for_empty_prompt
             if negative_prompt_embeds is None and zero_out_negative_prompt:
                 unconditional_embeddings = torch.zeros_like(text_embeddings)
-                if pooled_text_embeddings:
+                if pooled_text_embeddings is not None:
                     pooled_unconditional_embeddings = torch.zeros_like(pooled_text_embeddings)
                 else:
                     pooled_unconditional_embeddings = None
