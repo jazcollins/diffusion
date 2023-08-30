@@ -170,8 +170,7 @@ def stable_diffusion_xl(
 
     tokenizer = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer')
     tokenizer_2 = CLIPTokenizer.from_pretrained(model_name, subfolder='tokenizer_2')
-    # noise_scheduler = DDPMScheduler.from_pretrained(model_name, subfolder='scheduler')
-    noise_scheduler = EulerDiscreteScheduler.from_pretrained(model_name, subfolder='scheduler')
+    noise_scheduler = DDPMScheduler.from_pretrained(model_name, subfolder='scheduler')
     inference_noise_scheduler = EulerDiscreteScheduler.from_pretrained(model_name, subfolder='scheduler')
 
     model = StableDiffusion(
