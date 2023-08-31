@@ -59,6 +59,7 @@ class StreamingLAIONDataset(StreamingDataset):
         image_size: Optional[int] = None,
         num_canonical_nodes: Optional[int] = None,
         sdxl: Optional[bool] = False,
+        cond_drop_prob: float = 0.0,
     ) -> None:
 
         super().__init__(
@@ -89,6 +90,7 @@ class StreamingLAIONDataset(StreamingDataset):
         self.sdxl = sdxl
         if sdxl:
             self.sdxl_transform = RandomCropSquareReturnTransform(self.image_size)
+        self.cond_drop_prob = cond_drop_prob # sdxl
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
@@ -140,9 +142,14 @@ class StreamingLAIONDataset(StreamingDataset):
                                                                   dtype=np.float16).copy()).reshape(4, 64, 64)
 
         if self.sdxl:  # add crop and img size params
-            out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left])
-            out['cond_original_size'] = torch.tensor([image_width, image_height])
-            out['cond_target_size'] = torch.tensor([self.image_size, self.image_size])
+            if torch.rand(1) < self.cond_drop_prob: # TODO i think stability does separate zero-ing for each element? doing this for now
+                out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left]) * 0
+                out['cond_original_size'] = torch.tensor([image_width, image_height]) * 0
+                out['cond_target_size'] = torch.tensor([self.image_size, self.image_size]) * 0
+            else:
+                out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left])
+                out['cond_original_size'] = torch.tensor([image_width, image_height])
+                out['cond_target_size'] = torch.tensor([self.image_size, self.image_size])
         return out
 
 
@@ -162,6 +169,7 @@ def build_streaming_laion_dataloader(
     shuffle: bool = True,
     num_canonical_nodes: Optional[int] = None,
     sdxl: bool = False,
+    cond_drop_prob: float = 0.0,
     **dataloader_kwargs,
 ):
     """Builds a streaming LAION dataloader.
@@ -223,6 +231,7 @@ def build_streaming_laion_dataloader(
         image_size=resize_size,
         num_canonical_nodes=num_canonical_nodes,
         sdxl=sdxl,
+        cond_drop_prob=cond_drop_prob,
     )
     # Create a subset of the dataset
     if num_samples is not None:
