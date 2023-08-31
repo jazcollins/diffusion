@@ -207,6 +207,14 @@ class StableDiffusion(ComposerModel):
                         text_encoder_2_out = self.text_encoder_2(conditioning_2, output_hidden_states=True)
                         pooled_conditioning = text_encoder_2_out[0]  # (batch_size, 1280)
                         conditioning_2 = text_encoder_2_out.hidden_states[-2]  # (batch_size, 77, 1280)
+
+                        # zero out the appropriate things
+                        if batch[self.text_key].sum() == 0:
+                            conditioning = torch.zeros_like(conditioning)
+                        if batch[self.text_key_2].sum() == 0:
+                            conditioning_2 = torch.zeros_like(conditioning_2)
+                            pooled_conditioning = torch.zeros_like(pooled_conditioning)
+
                         conditioning = torch.concat([conditioning, conditioning_2], dim=-1)
                     else:
                         conditioning = self.text_encoder(conditioning)[0]  # Should be (batch_size, 77, 768)
@@ -537,6 +545,10 @@ class StableDiffusion(ComposerModel):
                                                         max_length=self.tokenizer_2.model_max_length,
                                                         truncation=True,
                                                         return_tensors='pt').input_ids
+                if prompt == '': # zero out
+                    tokenized_prompts = torch.zeros_like(tokenized_prompts)
+                    tokenized_prompts_2 = torch.zeros_like(tokenized_prompts_2)
+                    
             if self.sdxl:
                 # text encoder 1
                 text_embeddings = self.text_encoder(tokenized_prompts.to(device), output_hidden_states=True).hidden_states[-2]
@@ -544,6 +556,14 @@ class StableDiffusion(ComposerModel):
                 text_encoder_2_out = self.text_encoder_2(tokenized_prompts_2.to(device), output_hidden_states=True)
                 pooled_text_embeddings = text_encoder_2_out[0]  # (batch_size, 1280)
                 text_embeddings_2 = text_encoder_2_out.hidden_states[-2]  # (batch_size, 77, 1280)
+
+                # zero out the appropriate things
+                if tokenized_prompts.sum() == 0:
+                    text_embeddings = torch.zeros_like(text_embeddings)
+                if tokenized_prompts_2.sum() == 0:
+                    text_embeddings_2 = torch.zeros_like(text_embeddings_2)
+                    pooled_text_embeddings = torch.zeros_like(pooled_text_embeddings)
+
                 # concat
                 text_embeddings = torch.concat([text_embeddings, text_embeddings_2], dim=-1)
             else:

@@ -60,6 +60,7 @@ class StreamingLAIONDataset(StreamingDataset):
         num_canonical_nodes: Optional[int] = None,
         sdxl: Optional[bool] = False,
         cond_drop_prob: float = 0.0,
+        zero_dropped_captions: bool = False,
     ) -> None:
 
         super().__init__(
@@ -91,6 +92,7 @@ class StreamingLAIONDataset(StreamingDataset):
         if sdxl:
             self.sdxl_transform = RandomCropSquareReturnTransform(self.image_size)
         self.cond_drop_prob = cond_drop_prob # sdxl
+        self.zero_dropped_captions = zero_dropped_captions
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
@@ -109,26 +111,49 @@ class StreamingLAIONDataset(StreamingDataset):
         # Drop the caption with probability `caption_drop_prob`
         if torch.rand(1) < self.caption_drop_prob:
             caption = ''
+            tokenized_caption = self.tokenizer(
+                caption,
+                padding='max_length',
+                max_length=self.tokenizer.model_max_length,
+                truncation=True,
+            )['input_ids']
+            tokenized_caption = torch.tensor(tokenized_caption)
+            if self.zero_dropped_captions:
+                tokenized_caption = torch.zeros_like(tokenized_caption)
         else:
             caption = sample['caption']
-        tokenized_caption = self.tokenizer(
-            caption,
-            padding='max_length',
-            max_length=self.tokenizer.model_max_length,
-            truncation=True,
-        )['input_ids']
-        tokenized_caption = torch.tensor(tokenized_caption)
+            tokenized_caption = self.tokenizer(
+                caption,
+                padding='max_length',
+                max_length=self.tokenizer.model_max_length,
+                truncation=True,
+            )['input_ids'] 
+            tokenized_caption = torch.tensor(tokenized_caption)
+
         out = {'image': img, 'captions': tokenized_caption}
 
         # optional SDXL tokenizer_2
         if self.sdxl:
-            tokenized_caption_2 = self.tokenizer_2(
-                caption,
-                padding='max_length',
-                max_length=self.tokenizer_2.model_max_length,
-                truncation=True,
-            )['input_ids']
-            tokenized_caption_2 = torch.tensor(tokenized_caption_2)
+            if torch.rand(1) < self.caption_drop_prob:
+                caption = ''
+                tokenized_caption_2 = self.tokenizer_2(
+                    caption,
+                    padding='max_length',
+                    max_length=self.tokenizer_2.model_max_length,
+                    truncation=True,
+                )['input_ids']
+                tokenized_caption_2 = torch.tensor(tokenized_caption_2)
+                if self.zero_dropped_captions:
+                    tokenized_caption_2 = torch.zeros_like(tokenized_caption_2)
+            else:
+                caption = sample['caption']
+                tokenized_caption_2 = self.tokenizer_2(
+                    caption,
+                    padding='max_length',
+                    max_length=self.tokenizer_2.model_max_length,
+                    truncation=True,
+                )['input_ids']
+                tokenized_caption_2 = torch.tensor(tokenized_caption_2)
             out['captions_2'] = tokenized_caption_2
 
         if 'caption_latents' in sample:
@@ -170,6 +195,7 @@ def build_streaming_laion_dataloader(
     num_canonical_nodes: Optional[int] = None,
     sdxl: bool = False,
     cond_drop_prob: float = 0.0,
+    zero_dropped_captions: bool = False,
     **dataloader_kwargs,
 ):
     """Builds a streaming LAION dataloader.
@@ -232,6 +258,7 @@ def build_streaming_laion_dataloader(
         num_canonical_nodes=num_canonical_nodes,
         sdxl=sdxl,
         cond_drop_prob=cond_drop_prob,
+        zero_dropped_captions=zero_dropped_captions,
     )
     # Create a subset of the dataset
     if num_samples is not None:
