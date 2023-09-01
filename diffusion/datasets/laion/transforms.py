@@ -49,6 +49,22 @@ class LargestCenterSquare:
         return img
 
 
+class LargestCenterSquareReturnTransform:
+    """Center crop to the largest square of a PIL image."""
+
+    def __init__(self, size):
+        self.size = size
+        self.center_crop = transforms.CenterCrop(self.size)
+
+    def __call__(self, img):
+        # First, resize the image such that the smallest side is self.size while preserving aspect ratio.
+        orig_w, orig_h = img.size
+        img = transforms.functional.resize(img, self.size, antialias=True)
+        # Then take a center crop to a square.
+        img = self.center_crop(img)
+        return img, 0, 0, orig_h, orig_w
+
+
 class RandomCropSquareReturnTransform:
     """Randomly crop square of a PIL image and return the crop parameters."""
 

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import CLIPTokenizer
 
-from diffusion.datasets.laion.transforms import LargestCenterSquare, RandomCropSquareReturnTransform
+from diffusion.datasets.laion.transforms import LargestCenterSquare, RandomCropSquareReturnTransform, LargestCenterSquareReturnTransform
 
 # Disable PIL max image size limit
 Image.MAX_IMAGE_PIXELS = None
@@ -61,6 +61,7 @@ class StreamingLAIONDataset(StreamingDataset):
         sdxl: Optional[bool] = False,
         cond_drop_prob: float = 0.0,
         zero_dropped_captions: bool = False,
+        rand_crop: bool = True,
     ) -> None:
 
         super().__init__(
@@ -90,7 +91,10 @@ class StreamingLAIONDataset(StreamingDataset):
         self.image_size = image_size
         self.sdxl = sdxl
         if sdxl:
-            self.sdxl_transform = RandomCropSquareReturnTransform(self.image_size)
+            if rand_crop:
+                self.sdxl_transform = RandomCropSquareReturnTransform(self.image_size)
+            else:
+                self.sdxl_transform = LargestCenterSquareReturnTransform(self.image_size)
         self.cond_drop_prob = cond_drop_prob # sdxl
         self.zero_dropped_captions = zero_dropped_captions
 
@@ -196,6 +200,7 @@ def build_streaming_laion_dataloader(
     sdxl: bool = False,
     cond_drop_prob: float = 0.0,
     zero_dropped_captions: bool = False,
+    rand_crop: bool = True
     **dataloader_kwargs,
 ):
     """Builds a streaming LAION dataloader.
@@ -259,6 +264,7 @@ def build_streaming_laion_dataloader(
         sdxl=sdxl,
         cond_drop_prob=cond_drop_prob,
         zero_dropped_captions=zero_dropped_captions,
+        rand_crop=rand_crop,
     )
     # Create a subset of the dataset
     if num_samples is not None:
