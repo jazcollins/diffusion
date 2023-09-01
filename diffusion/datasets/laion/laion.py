@@ -189,7 +189,7 @@ def build_streaming_laion_dataloader(
     sdxl: bool = False,
     cond_drop_prob: float = 0.0,
     zero_dropped_captions: bool = False,
-    rand_crop: bool = True
+    rand_crop: bool = True,
     **dataloader_kwargs,
 ):
     """Builds a streaming LAION dataloader.
