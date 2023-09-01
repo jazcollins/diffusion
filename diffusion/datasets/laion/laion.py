@@ -138,26 +138,15 @@ class StreamingLAIONDataset(StreamingDataset):
 
         # optional SDXL tokenizer_2
         if self.sdxl:
-            if torch.rand(1) < self.caption_drop_prob:
-                caption = ''
-                tokenized_caption_2 = self.tokenizer_2(
-                    caption,
-                    padding='max_length',
-                    max_length=self.tokenizer_2.model_max_length,
-                    truncation=True,
-                )['input_ids']
-                tokenized_caption_2 = torch.tensor(tokenized_caption_2)
-                if self.zero_dropped_captions:
-                    tokenized_caption_2 = torch.zeros_like(tokenized_caption_2)
-            else:
-                caption = sample['caption']
-                tokenized_caption_2 = self.tokenizer_2(
-                    caption,
-                    padding='max_length',
-                    max_length=self.tokenizer_2.model_max_length,
-                    truncation=True,
-                )['input_ids']
-                tokenized_caption_2 = torch.tensor(tokenized_caption_2)
+            tokenized_caption_2 = self.tokenizer_2(
+                caption,
+                padding='max_length',
+                max_length=self.tokenizer_2.model_max_length,
+                truncation=True,
+            )['input_ids']
+            tokenized_caption_2 = torch.tensor(tokenized_caption_2)
+            if self.zero_dropped_captions:
+                tokenized_caption_2 = torch.zeros_like(tokenized_caption_2)
             out['captions_2'] = tokenized_caption_2
 
         if 'caption_latents' in sample:
