@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from transformers import AutoTokenizer
 
-from diffusion.datasets.laion.transforms import LargestCenterSquare
+from diffusion.datasets.laion.transforms import LargestCenterSquare, RandomCropSquareReturnTransform, LargestCenterSquareReturnTransform
 
 # Disable PIL max image size limit
 Image.MAX_IMAGE_PIXELS = None
@@ -45,12 +45,16 @@ class StreamingImageCaptionDataset(StreamingDataset):
         remote: Optional[str] = None,
         local: Optional[str] = None,
         tokenizer_name_or_path: str = 'stabilityai/stable-diffusion-2-base',
+        tokenizer_name_or_path_2: Optional[str] = None,
         caption_drop_prob: float = 0.0,
         caption_selection: str = 'first',
         transform: Optional[Callable] = None,
         image_size: Optional[int] = None,
         image_key: str = 'image',
         caption_key: str = 'caption',
+        sdxl: Optional[bool] = False,
+        cond_drop_prob: float = 0.0,
+        rand_crop: bool = True,
         **streaming_kwargs,
     ) -> None:
 
@@ -66,11 +70,25 @@ class StreamingImageCaptionDataset(StreamingDataset):
 
         self.transform = transform
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path, subfolder='tokenizer')
+        if sdxl:
+            if tokenizer_name_or_path_2:
+                self.tokenizer_2 = AutoTokenizer.from_pretrained(tokenizer_name_or_path_2, subfolder='tokenizer_2')
+            else:
+                raise ValueError('Must provide value for tokenizer_name_or_path_2')
+            
         self.caption_drop_prob = caption_drop_prob
         self.caption_selection = caption_selection
         self.image_size = image_size
         self.image_key = image_key
         self.caption_key = caption_key
+
+        self.sdxl = sdxl
+        if sdxl:
+            if rand_crop:
+                self.sdxl_transform = RandomCropSquareReturnTransform(self.image_size)
+            else:
+                self.sdxl_transform = LargestCenterSquareReturnTransform(self.image_size)
+        self.cond_drop_prob = cond_drop_prob # sdxl
 
     def __getitem__(self, index):
         sample = super().__getitem__(index)
@@ -81,6 +99,12 @@ class StreamingImageCaptionDataset(StreamingDataset):
             img = Image.open(BytesIO(sample[self.image_key]))
         if img.mode != 'RGB':
             img = img.convert('RGB')
+
+        crop_top, crop_left, image_height, image_width = None, None, None, None
+        if self.sdxl:
+            # sdxl crop to return params
+            img, crop_top, crop_left, image_height, image_width = self.sdxl_transform(img)
+
         if self.transform is not None:
             img = self.transform(img)
 
@@ -99,7 +123,29 @@ class StreamingImageCaptionDataset(StreamingDataset):
                                            truncation=True,
                                            return_tensors='pt')['input_ids'][0]
 
-        return {'image': img, 'captions': tokenized_caption}
+        out = {'image': img, 'captions': tokenized_caption}
+
+        # optional SDXL tokenizer_2
+        if self.sdxl:
+            tokenized_caption_2 = self.tokenizer_2(
+                caption,
+                padding='max_length',
+                max_length=self.tokenizer_2.model_max_length,
+                truncation=True,
+            )['input_ids'][0]
+            out['captions_2'] = tokenized_caption_2
+
+            # microconditioning - add crop and img size params
+            if torch.rand(1) < self.cond_drop_prob: # microconditioning drop-out
+                out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left]) * 0
+                out['cond_original_size'] = torch.tensor([image_width, image_height]) * 0
+                out['cond_target_size'] = torch.tensor([self.image_size, self.image_size]) * 0
+            else:
+                out['cond_crops_coords_top_left'] = torch.tensor([crop_top, crop_left])
+                out['cond_original_size'] = torch.tensor([image_width, image_height])
+                out['cond_target_size'] = torch.tensor([self.image_size, self.image_size])
+            
+        return out
 
 
 def build_streaming_image_caption_dataloader(
@@ -107,12 +153,16 @@ def build_streaming_image_caption_dataloader(
     local: Union[str, List],
     batch_size: int,
     tokenizer_name_or_path: str = 'stabilityai/stable-diffusion-2-base',
+    tokenizer_name_or_path_2: Optional[str] = None,
     caption_drop_prob: float = 0.0,
     resize_size: int = 256,
     caption_selection: str = 'first',
     transform: Optional[List[Callable]] = None,
     image_key: str = 'image',
     caption_key: str = 'caption',
+    sdxl: Optional[bool] = False,
+    cond_drop_prob: float = 0.0,
+    rand_crop: bool = True,
     streaming_kwargs: Optional[Dict] = None,
     dataloader_kwargs: Optional[Dict] = None,
 ):
@@ -158,17 +208,25 @@ def build_streaming_image_caption_dataloader(
 
     # Setup the transforms to apply
     if transform is None:
-        transform = [
-            LargestCenterSquare(resize_size),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),  # # Normalize from 0 to 1 to -1 to 1
-        ]
+        if sdxl:
+            # do center square crop separately
+            transform = [ 
+                transforms.ToTensor(), 
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                ]
+        else:
+            transform = [
+                LargestCenterSquare(resize_size),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),  # # Normalize from 0 to 1 to -1 to 1
+            ]
     transform = transforms.Compose(transform)
     assert isinstance(transform, Callable)
 
     dataset = StreamingImageCaptionDataset(
         streams=streams,
         tokenizer_name_or_path=tokenizer_name_or_path,
+        tokenizer_name_or_path_2=tokenizer_name_or_path_2,
         caption_drop_prob=caption_drop_prob,
         caption_selection=caption_selection,
         transform=transform,
@@ -176,6 +234,9 @@ def build_streaming_image_caption_dataloader(
         image_key=image_key,
         caption_key=caption_key,
         batch_size=batch_size,
+        sdxl=sdxl,
+        cond_drop_prob=cond_drop_prob,
+        rand_crop=rand_crop,
         **streaming_kwargs,
     )
 
