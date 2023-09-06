@@ -24,6 +24,13 @@ try:
 except:
     is_xformers_installed = False
 
+def zero_module(module):
+    """
+    Zero out the parameters of a module and return it.
+    """
+    for p in module.parameters():
+        p.detach().zero_()
+    return module
 
 def stable_diffusion_xl(
     model_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
@@ -91,6 +98,23 @@ def stable_diffusion_xl(
         # config[0]['block_out_channels'] = [32, 32, 1280]  # make smaller and more manageable for local debug
 
         unet = UNet2DConditionModel(**config[0])
+
+        # zero out some params at init
+        # see https://discuss.pytorch.org/t/why-would-someone-zero-out-the-parameters-of-a-module-in-the-constructor/157148
+
+        print('doing FixUp init!')
+        
+        # zero out final conv output
+        unet.conv_out = zero_module(unet.conv_out)
+
+        for name, layer in unet.named_modules(): 
+            # zero out final conv in resnet blocks
+            if name.endswith('conv2'):
+                layer = zero_module(layer)
+            # zero out proj_out in attention blocks
+            if name.endswith('to_out.0'):
+                layer = zero_module(layer)
+            # print(name, layer)
 
         # # smaller SDXL-style unet for debugging
         # unet = UNet2DConditionModel(

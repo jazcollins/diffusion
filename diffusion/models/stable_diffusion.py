@@ -263,13 +263,9 @@ class StableDiffusion(ComposerModel):
             add_text_embeds = pooled_conditioning
             added_cond_kwargs = {'text_embeds': add_text_embeds, 'time_ids': add_time_ids}
 
-        # try to add normalization in cross attn layer (note: its layer norm but should be group norm)
-        cross_attention_kwargs = {'cross_attention_norm': True}
-
         # Forward through the model
         return self.unet(noised_latents, timesteps, conditioning,
-                         added_cond_kwargs=added_cond_kwargs,
-                         cross_attention_kwargs=cross_attention_kwargs)['sample'], targets, timesteps
+                         added_cond_kwargs=added_cond_kwargs)['sample'], targets, timesteps
 
     def loss(self, outputs, batch):
         """Loss between unet output and added noise, typically mse."""
@@ -501,9 +497,6 @@ class StableDiffusion(ComposerModel):
 
             added_cond_kwargs = {'text_embeds': add_text_embeds, 'time_ids': add_time_ids}
 
-        # try to add normalization in cross attn layer (note: its layer norm but should be group norm)
-        cross_attention_kwargs = {'cross_attention_norm': True}
-
         # backward diffusion process
         for t in tqdm(self.inference_scheduler.timesteps, disable=not progress_bar):
             if do_classifier_free_guidance:
@@ -516,8 +509,7 @@ class StableDiffusion(ComposerModel):
             pred = self.unet(latent_model_input,
                              t,
                              encoder_hidden_states=text_embeddings,
-                             added_cond_kwargs=added_cond_kwargs,
-                             cross_attention_kwargs=cross_attention_kwargs).sample
+                             added_cond_kwargs=added_cond_kwargs).sample
 
             if do_classifier_free_guidance:
                 # perform guidance. Note this is only techincally correct for prediction_type 'epsilon'
