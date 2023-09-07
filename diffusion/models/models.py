@@ -165,14 +165,14 @@ def stable_diffusion_xl(
         #     upcast_attention=None,
         #     use_linear_projection=True)
 
-    if fsdp:  # SDXL
-        # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
-        unet.up_blocks._fsdp_wrap = False
-        unet.down_blocks._fsdp_wrap = False
-        for block in unet.up_blocks:
-            block._fsdp_wrap = True
-        for block in unet.down_blocks:
-            block._fsdp_wrap = True
+    # if fsdp:  # SDXL
+    #     # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
+    #     unet.up_blocks._fsdp_wrap = False
+    #     unet.down_blocks._fsdp_wrap = False
+    #     for block in unet.up_blocks:
+    #         block._fsdp_wrap = True
+    #     for block in unet.down_blocks:
+    #         block._fsdp_wrap = True
 
     if encode_latents_in_fp16:
         try:
