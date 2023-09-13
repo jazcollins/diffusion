@@ -17,6 +17,8 @@ from diffusion.models.pixel_diffusion import PixelDiffusion
 from diffusion.models.stable_diffusion import StableDiffusion
 from diffusion.schedulers.schedulers import ContinuousTimeScheduler
 
+from diffusion.algorithms.attn_clamp import ClampedAttnProcessor2_0, ClampedXFormersAttnProcessor
+
 try:
     import xformers  # type: ignore
     del xformers
@@ -46,6 +48,7 @@ def stable_diffusion_xl(
     precomputed_latents: bool = False,
     encode_latents_in_fp16: bool = True,
     fsdp: bool = True,
+    qkv_clamp: Optional[float] = None,
 ):
     """Stable diffusion v2 training setup.
 
@@ -93,20 +96,13 @@ def stable_diffusion_xl(
 
     else:
         config = PretrainedConfig.get_config_dict(unet_model_name, subfolder='unet')
-
-        # note: local only
-        # config[0]['block_out_channels'] = [32, 32, 1280]  # make smaller and more manageable for local debug
-
         unet = UNet2DConditionModel(**config[0])
 
         # zero out some params at init
         # see https://discuss.pytorch.org/t/why-would-someone-zero-out-the-parameters-of-a-module-in-the-constructor/157148
-
         print('doing FixUp init!')
-        
         # zero out final conv output
         unet.conv_out = zero_module(unet.conv_out)
-
         for name, layer in unet.named_modules(): 
             # zero out final conv in resnet blocks
             if name.endswith('conv2'):
@@ -114,65 +110,6 @@ def stable_diffusion_xl(
             # zero out proj_out in attention blocks
             if name.endswith('to_out.0'):
                 layer = zero_module(layer)
-            # print(name, layer)
-
-        # # smaller SDXL-style unet for debugging
-        # unet = UNet2DConditionModel(
-        #     act_fn='silu',
-        #     addition_embed_type='text_time',
-        #     addition_embed_type_num_heads=64,
-        #     addition_time_embed_dim=256,
-        #     attention_head_dim=[5, 10, 20],
-        #     block_out_channels=[32, 64, 1280],  # make smaller and more manageable for local debug,
-        #     # block_out_channels=[320, 640, 1280],
-        #     center_input_sample=False,
-        #     class_embed_type=None,
-        #     class_embeddings_concat=False,
-        #     conv_in_kernel=3,
-        #     conv_out_kernel=3,
-        #     cross_attention_dim=2048,
-        #     cross_attention_norm=None,
-        #     down_block_types=['DownBlock2D', 'CrossAttnDownBlock2D', 'CrossAttnDownBlock2D'],
-        #     downsample_padding=1,
-        #     dual_cross_attention=False,
-        #     encoder_hid_dim=None,
-        #     encoder_hid_dim_type=None,
-        #     flip_sin_to_cos=True,
-        #     freq_shift=0,
-        #     in_channels=4,
-        #     layers_per_block=2,
-        #     mid_block_only_cross_attention=None,
-        #     mid_block_scale_factor=1,
-        #     mid_block_type='UNetMidBlock2DCrossAttn',
-        #     norm_eps=1e-05,
-        #     norm_num_groups=32,
-        #     num_attention_heads=None,
-        #     num_class_embeds=None,
-        #     only_cross_attention=False,
-        #     out_channels=4,
-        #     projection_class_embeddings_input_dim=2816,  # assuming use of text_encoder_2
-        #     resnet_out_scale_factor=1.0,
-        #     resnet_skip_time_act=False,
-        #     resnet_time_scale_shift='default',
-        #     sample_size=128,
-        #     time_cond_proj_dim=None,
-        #     time_embedding_act_fn=None,
-        #     time_embedding_dim=None,
-        #     time_embedding_type='positional',
-        #     timestep_post_act=None,
-        #     transformer_layers_per_block=[1, 2, 10],
-        #     up_block_types=['CrossAttnUpBlock2D', 'CrossAttnUpBlock2D', 'UpBlock2D'],
-        #     upcast_attention=None,
-        #     use_linear_projection=True)
-
-    if fsdp:  # SDXL
-        # Can't fsdp wrap up_blocks or down_blocks because the forward pass calls length on these
-        unet.up_blocks._fsdp_wrap = False
-        unet.down_blocks._fsdp_wrap = False
-        for block in unet.up_blocks:
-            block._fsdp_wrap = True
-        for block in unet.down_blocks:
-            block._fsdp_wrap = True
 
     if encode_latents_in_fp16:
         try:
@@ -183,7 +120,6 @@ def stable_diffusion_xl(
         text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(model_name,
                                                                      subfolder='text_encoder_2',
                                                                      torch_dtype=torch.float16)
-        # import pdb;pdb.set_trace()
     else:
         try:
             vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae')
@@ -222,7 +158,22 @@ def stable_diffusion_xl(
         if is_xformers_installed:
             model.unet.enable_xformers_memory_efficient_attention()
             model.vae.enable_xformers_memory_efficient_attention()
-        # print('RE-ENABLE XFORMERS')
+
+    if qkv_clamp:
+        attns_replaced = 0
+        for name, layer in model.unet.named_modules(): 
+            # my hacky model surgery
+            if name.endswith('attn1') or name.endswith('attn2'):
+                processor = layer.processor 
+                if processor.__class__.__name__ == 'AttnProcessor2_0':
+                    layer.processor = ClampedAttnProcessor2_0(clamp_val=qkv_clamp)
+                    attns_replaced += 1
+                if processor.__class__.__name__ == 'XFormersAttnProcessor':
+                    layer.processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
+                    attns_replaced += 1
+
+        print(f'Successfully replaced {attns_replaced} instances of AttnProcessor2_0 or XFormersAttnProcessor with Clamped Attention')
+
     return model
 
 
