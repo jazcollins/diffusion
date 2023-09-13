@@ -160,19 +160,24 @@ def stable_diffusion_xl(
             model.vae.enable_xformers_memory_efficient_attention()
 
     if qkv_clamp:
-        attns_replaced = 0
-        for name, layer in model.unet.named_modules(): 
-            # my hacky model surgery
-            if name.endswith('attn1') or name.endswith('attn2'):
-                processor = layer.processor 
-                if processor.__class__.__name__ == 'AttnProcessor2_0':
-                    layer.processor = ClampedAttnProcessor2_0(clamp_val=qkv_clamp)
-                    attns_replaced += 1
-                if processor.__class__.__name__ == 'XFormersAttnProcessor':
-                    layer.processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
-                    attns_replaced += 1
+        attn_processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
+        model.unet.set_attn_processor(attn_processor)
 
-        print(f'Successfully replaced {attns_replaced} instances of AttnProcessor2_0 or XFormersAttnProcessor with Clamped Attention')
+        print('set unet attn processor to ClampedXFormersAttnProcessor!')
+
+        # attns_replaced = 0
+        # for name, layer in model.unet.named_modules(): 
+        #     # my hacky model surgery
+        #     if name.endswith('attn1') or name.endswith('attn2'):
+        #         processor = layer.processor 
+        #         if processor.__class__.__name__ == 'AttnProcessor2_0':
+        #             layer.processor = ClampedAttnProcessor2_0(clamp_val=qkv_clamp)
+        #             attns_replaced += 1
+        #         if processor.__class__.__name__ == 'XFormersAttnProcessor':
+        #             layer.processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
+        #             attns_replaced += 1
+
+        # print(f'Successfully replaced {attns_replaced} instances of AttnProcessor2_0 or XFormersAttnProcessor with Clamped Attention')
 
     return model
 
