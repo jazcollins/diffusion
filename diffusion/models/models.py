@@ -156,17 +156,13 @@ def stable_diffusion_xl(
     if torch.cuda.is_available():
         model = DeviceGPU().module_to_device(model)
         if is_xformers_installed:
-            if qkv_clamp:
-                attn_processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
-                model.unet.enable_xformers_memory_efficient_attention(attention_op=[attn_processor])
-                print('set unet attn processor to ClampedXFormersAttnProcessor!')
-            else:
-                model.unet.enable_xformers_memory_efficient_attention()
+            model.unet.enable_xformers_memory_efficient_attention()
             model.vae.enable_xformers_memory_efficient_attention()
 
-    # if qkv_clamp:
-    #     attn_processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
-    #     model.unet.set_attn_processor(attn_processor)
+    if qkv_clamp:
+        attn_processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
+        model.unet.set_attn_processor(attn_processor)
+        print('set unet attn processor to ClampedXFormersAttnProcessor!')
 
         # attns_replaced = 0
         # for name, layer in model.unet.named_modules(): 
