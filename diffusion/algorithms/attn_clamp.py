@@ -5,7 +5,7 @@ import warnings
 import torch.nn.functional as F
 from typing import List, Optional
 
-class ClampedAttnProcessor2_0:
+class ClampedAttnProcessor2_0(XFormersAttnProcessor):
     r"""
     Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
     """
