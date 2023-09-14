@@ -161,6 +161,7 @@ class ClampedXFormersAttnProcessor:
         query = query.clamp(min=-self.clamp_val, max=self.clamp_val)
         key = query.clamp(min=-self.clamp_val, max=self.clamp_val)
         value = query.clamp(min=-self.clamp_val, max=self.clamp_val)
+        print('clipping qkv!')
 
         query = attn.head_to_batch_dim(query).contiguous()
         key = attn.head_to_batch_dim(key).contiguous()
