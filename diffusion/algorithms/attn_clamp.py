@@ -4,6 +4,7 @@ import diffusers
 import warnings
 import torch.nn.functional as F
 from typing import List, Optional
+from diffusers.models.attention_processor import XFormersAttnProcessor
 
 class ClampedAttnProcessor2_0(XFormersAttnProcessor):
     r"""
