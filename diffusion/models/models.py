@@ -158,7 +158,7 @@ def stable_diffusion_xl(
         if is_xformers_installed:
             if qkv_clamp:
                 attn_processor = ClampedXFormersAttnProcessor(clamp_val=qkv_clamp)
-                model.unet.enable_xformers_memory_efficient_attention(attention_op=attn_processor)
+                model.unet.enable_xformers_memory_efficient_attention(attention_op=[attn_processor])
                 print('set unet attn processor to ClampedXFormersAttnProcessor!')
             else:
                 model.unet.enable_xformers_memory_efficient_attention()
