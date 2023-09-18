@@ -4,9 +4,9 @@ import diffusers
 import warnings
 import torch.nn.functional as F
 from typing import List, Optional
-from diffusers.models.attention_processor import XFormersAttnProcessor
+# from diffusers.models.attention_processor import XFormersAttnProcessor
 
-class ClampedAttnProcessor2_0(XFormersAttnProcessor):
+class ClampedAttnProcessor2_0:
     r"""
     Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
     """
@@ -111,6 +111,8 @@ class ClampedXFormersAttnProcessor:
         self.attention_op = attention_op
         self.clamp_val = clamp_val
 
+        print('initializing qkv clip with value %f'%clamp_val)
+
     def __call__(
         self,
         attn,
@@ -162,7 +164,6 @@ class ClampedXFormersAttnProcessor:
         query = query.clamp(min=-self.clamp_val, max=self.clamp_val)
         key = query.clamp(min=-self.clamp_val, max=self.clamp_val)
         value = query.clamp(min=-self.clamp_val, max=self.clamp_val)
-        print('clipping qkv!')
 
         query = attn.head_to_batch_dim(query).contiguous()
         key = attn.head_to_batch_dim(key).contiguous()
