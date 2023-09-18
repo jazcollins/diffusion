@@ -162,8 +162,8 @@ class ClampedXFormersAttnProcessor:
         value = attn.to_v(encoder_hidden_states, scale=scale)
 
         query = query.clamp(min=-self.clamp_val, max=self.clamp_val)
-        key = query.clamp(min=-self.clamp_val, max=self.clamp_val)
-        value = query.clamp(min=-self.clamp_val, max=self.clamp_val)
+        key = key.clamp(min=-self.clamp_val, max=self.clamp_val)
+        value = value.clamp(min=-self.clamp_val, max=self.clamp_val)
 
         query = attn.head_to_batch_dim(query).contiguous()
         key = attn.head_to_batch_dim(key).contiguous()
