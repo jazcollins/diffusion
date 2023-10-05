@@ -30,9 +30,10 @@ class StableDiffusionInference():
     """Inference endpoint class for Stable Diffusion 2.
 
     Args:
-        chkpt_path (str, optional): The path to the local folder, URL or object score that contains the checkpoint.
-            If not specified, pulls the pretrained Stable Diffusion 2.0 base weights from HuggingFace.
-            Default: ``None``.
+        model_name (str, optional): Name of the model to load. Default: 'stabilityai/stable-diffusion-2-base'.
+        pretrained (bool): Whether to load pretrained weights. Default: True.
+        prediction_type (str): The type of prediction to use. Must be one of 'sample',
+            'epsilon', or 'v_prediction'. Default: `epsilon`.
     """
 
     def __init__(self,
@@ -113,15 +114,31 @@ class StableDiffusionXLInference():
     """Inference endpoint class for Stable Diffusion XL.
 
     Args:
-        chkpt_path (str, optional): The path to the local folder, URL or object score that contains the checkpoint.
-            If not specified, pulls the pretrained Stable Diffusion 2.0 base weights from HuggingFace.
-            Default: ``None``.
+        model_name (str, optional): Name of the model to load. Default: 'stabilityai/stable-diffusion-xl-base-1.0'.
+        unet_model_name (str): Name of the UNet model to load. Default: 'stabilityai/stable-diffusion-xl-base-1.0'.
+        vae_model_name (str): Name of the VAE model to load. Defaults to
+            'madebyollin/sdxl-vae-fp16-fix' as the official VAE checkpoint (from
+            'stabilityai/stable-diffusion-xl-base-1.0') is not compatible with fp16.
+        clip_qkv (float, optional): If not None, clip the qkv values to this value. Defaults to 6.0. Improves stability
+            of training.
+        pretrained (bool): Whether to load pretrained weights. Default: True.
+        prediction_type (str): The type of prediction to use. Must be one of 'sample',
+            'epsilon', or 'v_prediction'. Default: `epsilon`.
     """
 
-    def __init__(self, clip_qkv: Optional[float] = None, pretrained: bool = False, prediction_type: str = 'epsilon'):
+    def __init__(self,
+                 model_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
+                 unet_model_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
+                 vae_model_name: str = 'madebyollin/sdxl-vae-fp16-fix',
+                 clip_qkv: Optional[float] = None,
+                 pretrained: bool = False,
+                 prediction_type: str = 'epsilon'):
         self.device = torch.cuda.current_device()
 
         model = stable_diffusion_xl(
+            model_name=model_name,
+            unet_model_name=unet_model_name,
+            vae_model_name=vae_model_name,
             clip_qkv=clip_qkv,
             pretrained=pretrained,
             prediction_type=prediction_type,
