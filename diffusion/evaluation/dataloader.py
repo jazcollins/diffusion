@@ -21,6 +21,7 @@ from diffusion.models.models import SDXLTokenizer
 
 import urllib.request
 import json
+from composer.utils import dist
 
 log = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ log = logging.getLogger(__name__)
 Image.MAX_IMAGE_PIXELS = None
 
 
-class ImageNetClassesDataset(Dataset): # (StreamingDataset):
+class ImageNetClassesDataset(Dataset):
     """Streaming dataset for prompt-GT class pairs.
 
     Args:
@@ -131,7 +132,7 @@ def build_imagenet_dataloader(
     dataloader = DataLoader(
         dataset=dataset,
         batch_size=batch_size,
-        sampler=None,
+        sampler=dist.get_sampler(dataset),
         **dataloader_kwargs,
     )
 
