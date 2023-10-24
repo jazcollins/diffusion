@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from torchmetrics.multimodal import CLIPScore
 
 from diffusion.evaluation.clean_fid_eval import CleanFIDEvaluator
+from diffusion.evaluation.imagenet_eval import ImageNetEval
 
 
 def evaluate(config: DictConfig) -> None:
@@ -79,7 +80,8 @@ def evaluate(config: DictConfig) -> None:
                     optimizers=None,
                 )
 
-    evaluator: CleanFIDEvaluator = hydra.utils.instantiate(
+    evaluator: ImageNetEval = hydra.utils.instantiate(
+    # evaluator: CleanFIDEvaluator = hydra.utils.instantiate(
         config.evaluator,
         model=model,
         eval_dataloader=eval_dataloader,
