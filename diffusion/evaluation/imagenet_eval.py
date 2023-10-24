@@ -47,6 +47,9 @@ def get_classification_model(model_path):
                 mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
             ),
         ])
+
+        # otherwise os.mkdirs error in torch.hub.load
+        torch.hub.set_dir('/root/.cache/torch/hub/%d'%dist.get_local_rank())
         model = torch.hub.load("facebookresearch/swag", model="vit_h14_in1k")
     else:
         assert NotImplementedError
