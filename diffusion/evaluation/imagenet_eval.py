@@ -99,13 +99,13 @@ class ImageNetGenAccuracyMetric(Metric):
             _, preds = self.model(images).topk(1) # [B, 1]
         preds = preds.squeeze()
         
-        n_correct = torch.sum(preds == gt_classes).item()
-        n_total = preds.shape[0]
+        n_correct = torch.sum(preds == gt_classes) # .item()
+        n_total = preds.numel()
 
         self.correct += n_correct
         self.total += n_total
-        self.preds = torch.cat([self.preds, preds.cpu()])
-        self.gts = torch.cat([self.gts, gt_classes.cpu()])
+        self.preds = torch.cat([self.preds, preds])
+        self.gts = torch.cat([self.gts, gt_classes])
 
     def compute(self): #  -> Tensor:
         return self.correct.float() / self.total
@@ -241,6 +241,7 @@ class ImageNetEval:
         # Move CLIP metric to device
         self.device = dist.get_local_rank()
         self.metric = ImageNetGenAccuracyMetric(classifier_model_name_or_path)
+        self.metric = self.metric.to(self.device)
 
         # Set up things for plotting
         self.coarse_class_mapping, self.coarse_to_fine = prep_coarse_classes()
@@ -314,6 +315,7 @@ class ImageNetEval:
         return generated_images
 
     def _generate_coarse_cat_plot(self, gts, preds):
+        print(gts.shape)
         # construct empty counter dict
         coarse_class_dict = {}
         for key in self.coarse_to_fine.keys():
@@ -362,7 +364,8 @@ class ImageNetEval:
         print(f'{guidance_scale} Generated ImageNet Class Accuracy: {score}')
 
         # Generate accuracy per coarse category
-        fig = self._generate_coarse_cat_plot(self.metric.gts.int(), self.metric.preds.int())
+        self.metric.sync() # gather across devices - [n_device, n_batch_size]
+        fig = self._generate_coarse_cat_plot(self.metric.gts.view(-1).int(), self.metric.preds.view(-1).int())
         metrics['CoarseCatPlot'] = fig
 
         return metrics
