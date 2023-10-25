@@ -417,7 +417,7 @@ class StableDiffusion(ComposerModel):
         batch_size = len(text_embeddings)  # len prompts * num_images_per_prompt
         # classifier free guidance + negative prompts
         # negative prompt is given in place of the unconditional input in classifier free guidance
-        pooled_embeddings = None
+        pooled_embeddings = pooled_text_embeddings
         if do_classifier_free_guidance:
             if not negative_prompt and not tokenized_negative_prompts and not negative_prompt_embeds and zero_out_negative_prompt:
                 # Negative prompt is empty and we want to zero it out
