@@ -61,6 +61,7 @@ class StreamingImageCaptionDataset(StreamingDataset):
         transform: Optional[Callable] = None,
         image_key: str = 'image',
         caption_key: str = 'caption',
+        ft_alt_text_prob: float = 0.0,
         sdxl: bool = False,
         zero_dropped_captions: bool = False,
         **streaming_kwargs,
@@ -84,6 +85,7 @@ class StreamingImageCaptionDataset(StreamingDataset):
         self.caption_selection = caption_selection
         self.image_key = image_key
         self.caption_key = caption_key
+        self.ft_alt_text_prob = ft_alt_text_prob
         self.zero_dropped_captions = zero_dropped_captions
 
         if self.sdxl:
@@ -143,7 +145,12 @@ class StreamingImageCaptionDataset(StreamingDataset):
             else:
                 out['drop_caption_mask'] = 1.0
         else:
-            caption = sample[self.caption_key]
+            if torch.rand(1) < self.ft_alt_text_prob:
+                # Sample alt text
+                caption = sample['alt_text']
+            else:
+                caption = sample[self.caption_key]
+
             if isinstance(caption, List) and self.caption_selection == 'first':
                 caption = caption[0]
             if isinstance(caption, List) and self.caption_selection == 'random':
@@ -182,6 +189,7 @@ def build_streaming_image_caption_dataloader(
     transform: Optional[List[Callable]] = None,
     image_key: str = 'image',
     caption_key: str = 'caption',
+    ft_alt_text_prob: float = 0.0,
     crop_type: Optional[str] = 'square',
     zero_dropped_captions: bool = True,
     streaming_kwargs: Optional[Dict] = None,
@@ -266,6 +274,7 @@ def build_streaming_image_caption_dataloader(
         transform=transform,
         image_key=image_key,
         caption_key=caption_key,
+        ft_alt_text_prob=ft_alt_text_prob,
         batch_size=batch_size,
         sdxl=sdxl,
         zero_dropped_captions=zero_dropped_captions,
