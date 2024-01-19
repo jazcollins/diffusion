@@ -141,17 +141,20 @@ class CleanFIDEvaluator:
             if self.sdxl:
                 crop_params = batch['cond_crops_coords_top_left']
                 input_size_params = batch['cond_original_size']
+                # Generate image with same resolution (+ aspect ratio) as input
+                height, width = batch['image'].shape[2], batch['image'].shape[3]
             else:
                 crop_params = None
                 input_size_params = None
+                height = width = self.size
 
             # Ensure a new seed for each batch, as randomness in model.generate is fixed.
             seed = starting_seed + batch_id
             # Generate images from the captions
             with get_precision_context(self.precision):
                 generated_images = self.model.generate(tokenized_prompts=captions,
-                                                       height=self.size,
-                                                       width=self.size,
+                                                       height=height,
+                                                       width=width,
                                                        guidance_scale=guidance_scale,
                                                        seed=seed,
                                                        crop_params=crop_params,
