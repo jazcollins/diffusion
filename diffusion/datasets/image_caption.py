@@ -63,6 +63,8 @@ class StreamingImageCaptionDataset(StreamingDataset):
         transform: Optional[Callable] = None,
         image_key: str = 'image',
         caption_key: str = 'caption',
+        synth_caption_key: str = 'synth_caption',
+        synth_caption_prob: float = 0.0,
         sdxl_conditioning: bool = False,
         zero_dropped_captions: bool = False,
         **streaming_kwargs,
@@ -90,6 +92,8 @@ class StreamingImageCaptionDataset(StreamingDataset):
         self.caption_selection = caption_selection
         self.image_key = image_key
         self.caption_key = caption_key
+        self.synth_caption_key = synth_caption_key
+        self.synth_caption_prob = synth_caption_prob
         self.zero_dropped_captions = zero_dropped_captions
 
         self.tokenizer = tokenizer
@@ -146,7 +150,11 @@ class StreamingImageCaptionDataset(StreamingDataset):
             else:
                 out['drop_caption_mask'] = 1.0
         else:
-            caption = sample[self.caption_key]
+            if torch.rand(1) < self.synth_caption_prob:
+                caption = sample[self.synth_caption_key]
+            else:
+                caption = sample[self.caption_key]
+
             if isinstance(caption, List) and self.caption_selection == 'first':
                 caption = caption[0]
             if isinstance(caption, List) and self.caption_selection == 'random':
@@ -179,6 +187,8 @@ def build_streaming_image_caption_dataloader(
     transform: Optional[List[Callable]] = None,
     image_key: str = 'image',
     caption_key: str = 'caption',
+    synth_caption_key: str = 'synth_caption',
+    synth_caption_prob: float = 0.0,
     crop_type: Optional[str] = 'square',
     zero_dropped_captions: bool = True,
     sdxl_conditioning: bool = False,
@@ -276,6 +286,8 @@ def build_streaming_image_caption_dataloader(
         transform=transform,
         image_key=image_key,
         caption_key=caption_key,
+        synth_caption_key=synth_caption_key,
+        synth_caption_prob=synth_caption_prob,
         batch_size=batch_size,
         sdxl_conditioning=sdxl_conditioning,
         zero_dropped_captions=zero_dropped_captions,
