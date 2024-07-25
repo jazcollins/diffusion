@@ -114,7 +114,7 @@ class LogDiffusionImages(Callback):
                                           attention_mask=clip_attention_mask,
                                           output_hidden_states=True)
                 clip_latents = clip_outputs.hidden_states[-2].cpu()
-                clip_pooled = clip_outputs[-1].cpu()
+                clip_pooled = clip_outputs[1].cpu()
                 clip_attention_mask = clip_attention_mask.cpu().to(torch.long)
 
                 latent_batch['T5_LATENTS'] = t5_latents
