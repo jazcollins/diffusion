@@ -61,14 +61,16 @@ def train(config: DictConfig) -> None:
     reproducibility.seed_all(config['seed'])
 
     model: ComposerModel = hydra.utils.instantiate(config.model)
-
+    # Grab the tokenizer if the model has one. Will need it later
+    if hasattr(model, 'tokenizer'):
+        tokenizer = model.tokenizer
+    else:
+        tokenizer = None
     # Check if this is training an autoencoder. If so, the optimizer needs different param groups
     if hasattr(model, 'autoencoder_loss'):
         optimizer = make_autoencoder_optimizer(config, model)
-        tokenizer = None
     else:
         optimizer = hydra.utils.instantiate(config.optimizer, params=model.parameters())
-        tokenizer = model.tokenizer
 
     # Load train dataset. Currently this expects to load according to the datasetHparam method.
     # This means adding external datasets is currently not super easy. Will refactor or check for
