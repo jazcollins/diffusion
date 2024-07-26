@@ -118,8 +118,9 @@ class LogDiffusionImages(Callback):
                 clip_attention_mask = clip_attention_mask.cpu().to(torch.long)
 
                 latent_batch['T5_LATENTS'] = t5_latents
+                latent_batch['T5_MASK'] = t5_attention_mask
                 latent_batch['CLIP_LATENTS'] = clip_latents
-                latent_batch['ATTENTION_MASK'] = torch.cat([t5_attention_mask, clip_attention_mask], dim=1)
+                latent_batch['CLIP_MASK'] = clip_attention_mask
                 latent_batch['CLIP_POOLED'] = clip_pooled
                 self.batched_latents.append(latent_batch)
 
@@ -139,13 +140,22 @@ class LogDiffusionImages(Callback):
         with get_precision_context(state.precision):
             all_gen_images = []
             if self.precomputed_latents:
+                seq_len = model.max_seq_len
                 for batch in self.batched_latents:
                     pooled_prompt = batch['CLIP_POOLED'].cuda()
-                    prompt_mask = batch['ATTENTION_MASK'].cuda()
                     t5_embeds = model.t5_proj(batch['T5_LATENTS'].cuda())
+                    t5_mask = batch['T5_MASK'].cuda()
                     clip_embeds = model.clip_proj(batch['CLIP_LATENTS'].cuda())
+                    clip_mask = batch['CLIP_MASK'].cuda()
+                    # ensure the t5 embeddings and clip embeddings don't exceed the max sequence length
+                    if t5_embeds.shape[1] > seq_len:
+                        t5_embeds = t5_embeds[:, :seq_len, :]
+                        t5_mask = t5_mask[:, :seq_len]
+                    if clip_embeds.shape[1] > seq_len:
+                        clip_embeds = clip_embeds[:, :seq_len, :]
+                        clip_mask = clip_mask[:, :seq_len]
                     prompt_embeds = torch.cat([t5_embeds, clip_embeds], dim=1)
-
+                    prompt_mask = torch.cat([t5_mask, clip_mask], dim=1)
                     gen_images = model.generate(prompt_embeds=prompt_embeds,
                                                 pooled_prompt=pooled_prompt,
                                                 prompt_mask=prompt_mask,

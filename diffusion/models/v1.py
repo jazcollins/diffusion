@@ -14,8 +14,8 @@ from composer.utils import dist
 from diffusers import AutoencoderKL, DDIMScheduler, DDPMScheduler, EulerDiscreteScheduler, UNet2DConditionModel
 from scipy.stats import qmc
 from torchmetrics import MeanSquaredError
-from transformers import PretrainedConfig
 from tqdm.auto import tqdm
+from transformers import PretrainedConfig
 
 from diffusion.models.autoencoder import AutoEncoder, load_autoencoder
 from diffusion.models.layers import zero_module
@@ -63,27 +63,31 @@ class DiffusionV1(ComposerModel):
         train_seed (int): Seed to use for generating diffusion process noise during training if using
             quasirandomness. Default: `42`.
         val_seed (int): Seed to use for generating eval images. Default: `1138`.
+        text_embed_dim (int): The dimension of the text embeddings. Default: `4096`.
+        max_seq_len (int): The maximum sequence length of the text embeddings. Default: `77`.
         fsdp (bool): whether to use FSDP, Default: `False`.
     """
 
-    def __init__(self,
-                 unet,
-                 vae,
-                 noise_scheduler,
-                 inference_noise_scheduler,
-                 loss_fn=F.mse_loss,
-                 prediction_type: str = 'epsilon',
-                 latent_mean: Tuple[float] = (0.0,) * 4,
-                 latent_std: Tuple[float] = (1 / 0.13025,) * 4,
-                 downsample_factor: int = 8,
-                 train_metrics: Optional[List] = None,
-                 val_metrics: Optional[List] = None,
-                 quasirandomness: bool = False,
-                 train_seed: int = 42,
-                 val_seed: int = 1138,
-                 text_embed_dim: int = 4096,
-                 fsdp: bool = False,
-                 ):
+    def __init__(
+        self,
+        unet,
+        vae,
+        noise_scheduler,
+        inference_noise_scheduler,
+        loss_fn=F.mse_loss,
+        prediction_type: str = 'epsilon',
+        latent_mean: Tuple[float] = (0.0,) * 4,
+        latent_std: Tuple[float] = (1 / 0.13025,) * 4,
+        downsample_factor: int = 8,
+        train_metrics: Optional[List] = None,
+        val_metrics: Optional[List] = None,
+        quasirandomness: bool = False,
+        train_seed: int = 42,
+        val_seed: int = 1138,
+        text_embed_dim: int = 4096,
+        max_seq_len: int = 77,
+        fsdp: bool = False,
+    ):
         super().__init__()
         self.unet = unet
         self.vae = vae
@@ -106,6 +110,7 @@ class DiffusionV1(ComposerModel):
         # freeze VAE during diffusion training
         self.vae.requires_grad_(False)
         self.vae = self.vae.half()
+        self.max_seq_len = max_seq_len
         if fsdp:
             # only wrap models we are training
             self.vae._fsdp_wrap = False
@@ -152,14 +157,23 @@ class DiffusionV1(ComposerModel):
         inputs = batch['image']
         with torch.cuda.amp.autocast(enabled=False):
             latents = self.vae.encode(inputs.half())['latent_dist'].sample().data
-        latents = (latents - self.latent_mean) / self.latent_std # scale latents
+        latents = (latents - self.latent_mean) / self.latent_std  # scale latents
 
         t5_embed = self.t5_proj(batch['T5_LATENTS'])
+        t5_mask = batch['T5_ATTENTION_MASK']
         clip_embed = self.clip_proj(batch['CLIP_LATENTS'])
+        clip_mask = batch['CLIP_ATTENTION_MASK']
+        # Ensure t5 embeddings and clip embeddings don't exceed the max sequence length
+        if t5_embed.shape[1] > self.max_seq_len:
+            t5_embed = t5_embed[:, :self.max_seq_len, :]
+            t5_mask = t5_mask[:, :self.max_seq_len]
+        if clip_embed.shape[1] > self.max_seq_len:
+            clip_embed = clip_embed[:, :self.max_seq_len, :]
+            clip_mask = clip_mask[:, :self.max_seq_len]
         text_embeds = torch.cat([t5_embed, clip_embed], dim=1)
         text_pooled_embeds = batch['CLIP_POOLED']
 
-        encoder_attention_mask = torch.cat([batch['T5_ATTENTION_MASK'], batch['CLIP_ATTENTION_MASK']], dim=1)
+        encoder_attention_mask = torch.cat([t5_mask, clip_mask], dim=1)
 
         # Sample the diffusion timesteps
         timesteps = self._generate_timesteps(latents)
@@ -284,17 +298,16 @@ class DiffusionV1(ComposerModel):
                 (representing original size of input image) to use when generating images with SDXL.
                 Default: `None`.
         """
-
         # TODO: do checks
         # if prompt_embeds.shape[:2] == prompt_mask.shape[:2]:
         #     raise ValueError(' ')
-        
+
         # Check all parts of negative prompts exist and are equal length
         # if neg_prompt_embeds is not None or neg_prompt_mask is not None or pooled_neg_prompt is not None:
 
         # if negative_negative_embedlen(prompt_embeds) != len(negative_prompt_embeds):
         #     raise ValueError('len(prompts) and len(negative_prompts) must be the same. \
-        #             A negative prompt must be provided for each given prompt.')        
+        #             A negative prompt must be provided for each given prompt.')
 
         # Create rng for the generation
         device = self.vae.device
@@ -326,7 +339,7 @@ class DiffusionV1(ComposerModel):
                 neg_prompt_embeds = _duplicate_tensor(neg_prompt_embeds, num_images_per_prompt)
                 pooled_neg_prompt = _duplicate_tensor(pooled_neg_prompt, num_images_per_prompt)
                 neg_prompt_mask = _duplicate_tensor(neg_prompt_mask, num_images_per_prompt)
-            
+
             # concat uncond + prompt
             text_embeddings = torch.cat([neg_prompt_embeds, text_embeddings])
             pooled_embeddings = torch.cat([pooled_neg_prompt, pooled_embeddings])
@@ -408,6 +421,7 @@ def _duplicate_tensor(tensor, num_images_per_prompt):
         -1,
     ] * len(tensor.shape[2:]))
 
+
 def build_diffusion_v1(
     unet_model_name: str = 'stabilityai/stable-diffusion-xl-base-1.0',
     vae_model_name: str = 'madebyollin/sdxl-vae-fp16-fix',
@@ -417,6 +431,7 @@ def build_diffusion_v1(
     latent_mean: Union[float, Tuple, str] = 0.0,
     latent_std: Union[float, Tuple, str] = 7.67754318618,
     text_embed_dim: int = 4096,
+    max_seq_len: int = 77,
     beta_schedule: str = 'scaled_linear',
     zero_terminal_snr: bool = False,
     train_metrics: Optional[List] = None,
@@ -449,6 +464,8 @@ def build_diffusion_v1(
         latent_std (float, Tuple, str): The std. dev. of the autoencoder latents. Either a float for a single value,
             a tuple of std_devs, or or `'latent_statistics'` to try to use the value from the autoencoder
             checkpoint. Defaults to `1/0.13025`.
+        text_embed_dim (int): The dimension of the text embeddings. Default: `4096`.
+        max_seq_len (int): The maximum sequence length of the text embeddings. Default: `77`.
         beta_schedule (str): The beta schedule to use. Must be one of 'scaled_linear', 'linear', or 'squaredcos_cap_v2'.
             Default: `scaled_linear`.
         zero_terminal_snr (bool): Whether to enforce zero terminal SNR. Default: `False`.
@@ -599,6 +616,7 @@ def build_diffusion_v1(
         train_seed=train_seed,
         val_seed=val_seed,
         text_embed_dim=text_embed_dim,
+        max_seq_len=max_seq_len,
         fsdp=fsdp,
     )
     if torch.cuda.is_available():
