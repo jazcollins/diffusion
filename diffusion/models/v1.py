@@ -495,12 +495,12 @@ def build_diffusion_v1(
         downsample_factor = 8
         # Use the pretrained vae
         try:
-            vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae', torch_dtype=torch.float16)
+            vae = AutoencoderKL.from_pretrained(vae_model_name, subfolder='vae', torch_dtype=torch.bfloat16)
         except:  # for handling SDXL vae fp16 fixed checkpoint
-            vae = AutoencoderKL.from_pretrained(vae_model_name, torch_dtype=torch.float16)
+            vae = AutoencoderKL.from_pretrained(vae_model_name, torch_dtype=torch.bfloat16)
     else:
         # Use a custom autoencoder
-        vae, latent_statistics = load_autoencoder(autoencoder_path, autoencoder_local_path, torch_dtype=torch.float16)
+        vae, latent_statistics = load_autoencoder(autoencoder_path, autoencoder_local_path, torch_dtype=torch.bfloat16)
         if latent_statistics is None and (latent_mean == 'latent_statistics' or latent_std == 'latent_statistics'):
             raise ValueError(
                 'Must specify latent scale when using a custom autoencoder without tracking latent statistics.')

@@ -82,12 +82,12 @@ class LogDiffusionImages(Callback):
                                                            local_files_only=True)
 
             t5_model = AutoModel.from_pretrained(text_encoder,
-                                                 torch_dtype=torch.float16,
+                                                 torch_dtype=torch.bfloat16,
                                                  cache_dir=self.cache_dir,
                                                  local_files_only=True).encoder.cuda().eval()
             clip_model = CLIPTextModel.from_pretrained(clip_encoder,
                                                        subfolder='text_encoder',
-                                                       torch_dtype=torch.float16,
+                                                       torch_dtype=torch.bfloat16,
                                                        cache_dir=self.cache_dir,
                                                        local_files_only=True).cuda().eval()
 
